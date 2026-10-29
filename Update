@@ -1,0 +1,35 @@
+Service, szerepkörök, munkavégzési mód
+A Service az egyetlen szervezeti fogalom, a Settings menüben hozható létre és szerkeszthető.
+A munkaköri szerepek ugyanígy kezelhetők a Settingsben.
+A munkavégzési mód Onsite / Hybrid / WFH, a szerepkörtől független.
+Az Emberek lista Service és mód szerint szűrhető.
+Asset ID: HU000001 formátum, automatikusan és folyamatosan kiosztva. Szerkesztéskor nem változik, törölt azonosítót nem oszt ki újra, és újratöltés után is megmarad. Kereshető, és egy gombbal másolható. A sorozatszám külön mező, a régi azonosító „Régi azonosító” mezőként megmarad.
+Típusok és modellek: a Settingsben létrehozhatók. A típusra vagy modellre kattintva az adott eszközök listája nyílik meg, és az eszközlistában is lehet ezek szerint szűrni.
+Custom Field Sets:
+Mezőcsoportot hozol létre (pl. Monitor_Fields), benne öt mezőtípusból választhatsz.
+A mezők kötelezővé tehetők, sorrendjük módosítható, deaktiválhatók.
+A csoport egy vagy több eszköztípushoz rendelhető.
+Módosításkor a már rögzített adatok nem vesznek el.
+Dashboard és navigáció:
+A darabszámok a meglévő eszközlistát nyitják meg, előre beállított szűrővel.
+A gyors áthelyezésnél kereshető a célpontok listája.
+Raktárba visszavétel előtt megerősítő kérdés jelenik meg.
+Floorplan:
+Külön szerkesztő mód van Save és Mégse gombbal. Mentés előtt semmi nem íródik ki, a Mégse visszaállítja a mentett állapotot.
+Irodánként külön látszik az irodai eszközhalmaz, a Hybrid halmaz és a WFH halmaz.
+A WFH eszközök nem húzhatók asztalra.
+A Hybrid eszköz asztalra tehető úgy, hogy közben a személyhez rendelve marad.
+A floorplan nem hoz létre és nem ad ki eszközt.
+Minden asztalhoz megadható a földi port azonosítója (pl. R4-5-15).
+Projects:
+A lista kereshető és szűrhető.
+A résztvevők táblázata pontosan a kért oszlopokkal készült.
+A számítógép és a monitor Asset ID-val szerepel, lezárásig csak foglalva, előkészítési állapottal (pl. „Waiting for Erase”).
+A billentyűzet, az egér és a kábelek csak checklist-elemek, Asset ID és készletbejegyzés nélkül.
+Lezárás: a kért megerősítő kérdés után a rendszer ellenőrzi az eszközöket, kiadja őket a meglévő kiadási folyamattal, és elkészíti a jegyzőkönyveket.
+Logs: valóban működő szűrők: All / Created / Updated / Moved / Checkout / Returned / Project activity, plusz szöveges keresés. A „Ki” oszlopba a Settings → Felhasználó menüben megadott név kerül.
+Személyek importja Excelből: pontosan a három kötelező adat (név, Service, mód).
+Hibás vagy hiányzó adat esetén a sor hibaként jelenik meg.
+Ismeretlen Service-nél választhatsz: létrehozás, hozzárendelés meglévőhöz vagy a sor kihagyása.
+Importálás előtt előnézet van, a végén megerősítés.
+Hálózati menü: eltávolítva, csak az asztal port-azonosítója maradt.
