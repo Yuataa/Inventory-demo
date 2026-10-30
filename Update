@@ -33,3 +33,667 @@ Hibás vagy hiányzó adat esetén a sor hibaként jelenik meg.
 Ismeretlen Service-nél választhatsz: létrehozás, hozzárendelés meglévőhöz vagy a sor kihagyása.
 Importálás előtt előnézet van, a végén megerősítés.
 Hálózati menü: eltávolítva, csak az asztal port-azonosítója maradt.
+
+‐------------------------------------------------
+
+TC IT Asset Management – Új fejlesztési terv
+
+1. A fejlesztés célja
+
+A már működő TC IT Asset Management alkalmazás továbbfejlesztése az alábbi követelmények szerint.
+
+A korábbi frissítések sikeresen elkészültek. Ne építsd újra szükségtelenül a már működő funkciókat.
+
+Kötelező fejlesztési szabályok
+
+- A kód módosítása előtt vizsgáld meg a meglévő projektet és annak jelenlegi működését.
+- Lehetőség szerint használd újra a meglévő komponenseket, folyamatokat, adatstruktúrákat és stílusokat.
+- Csak az itt felsorolt módosításokat, valamint az azok működéséhez szükséges kiegészítéseket végezd el.
+- Ne távolíts el és ne törj el meglévő funkciókat.
+- A weboldal teljes felhasználói felülete angol nyelvű legyen.
+- Az alkalmazás neve mindenhol "TC IT Asset Management" legyen.
+- Maradj a jelenlegi HTML-alapú prototípusnál.
+- Egyelőre ne állj át .NET 10-re.
+- Ne vezess be új backendet vagy aktív SQL-adatbázist.
+- Tartsd meg a jelenlegi, böngészőoldali adatkezelési és adattárolási megoldást.
+- Ne állítsd, hogy egy funkció elkészült vagy tesztelve lett, ha ezt ténylegesen nem ellenőrizted.
+
+2. Asset Name – Eszköznevek és elnevezési szabályok
+
+Minden eszköz rendelkezzen külön "Asset Name" mezővel az "Asset ID", a "Serial Number", az eszköztípus és a modell mellett.
+
+Az Asset Name az eszköz felismerésére szolgál, és a vállalat elnevezési szabályaihoz igazodik. Egyes eszköztípusoknál, például monitoroknál, elegendő lehet a modell neve. Más típusoknál, például számítógépeknél, minden eszköznek egyedi névre van szüksége.
+
+2.1. Elnevezési szabályok beállítása eszköztípusonként
+
+A "Settings → Types & Models" részben, vagy az eszköztípusok megfelelő beállítási felületén lehessen külön-külön meghatározni, hogyan jöjjön létre az Asset Name az adott eszköztípusnál.
+
+Két lehetőség legyen elérhető.
+
+A lehetőség – Modellnév használata
+
+Az Asset Name automatikusan egyezzen meg a kiválasztott modell nevével.
+
+Példa:
+
+- Eszköztípus: Monitor
+- Modellnév: Dell P2422H
+- Asset Name: Dell P2422H
+
+Több azonos modellű monitor is rendelkezhet ugyanazzal az Asset Name értékkel.
+
+B lehetőség – Egyedi eszköznév
+
+A felhasználó manuálisan adhasson meg egyedi Asset Name értéket.
+
+Ez különösen a számítógépeknél fontos, mivel minden gép saját gépnévvel vagy vállalati azonosítóval rendelkezhet.
+
+Példa:
+
+Eszköztípus| Modellnév| Asset Name
+Monitor| Dell P2422H| Dell P2422H
+Monitor| Dell P2422H| Dell P2422H
+Számítógép| HP EliteBook 840 G7| PC-HU-001
+Számítógép| HP EliteBook 840 G7| PC-HU-002
+
+A fenti értékek csak példák.
+
+Az elnevezési szabály minden eszköztípusnál külön beállítható legyen, beleértve a felhasználó által később létrehozott típusokat is.
+
+2.2. Az Asset Name működése új eszköz létrehozásakor
+
+Új eszköz létrehozásakor:
+
+- A rendszer olvassa be a kiválasztott eszköztípushoz beállított elnevezési szabályt.
+- Modellnév használata esetén az Asset Name automatikusan töltődjön ki a modell nevével.
+- Egyedi elnevezés esetén a felhasználó manuálisan adhassa meg a nevet.
+- Ha a modell megváltozik, és az Asset Name továbbra is automatikusan a modell nevéből származik, a rendszer frissítse az Asset Name értékét.
+- Ha a felhasználó manuálisan módosítja az automatikusan generált nevet, az adott eszköz váltson egyedi elnevezési módra, hogy a későbbi modellváltoztatások ne írják felül a megadott nevet.
+- Ha nincs kiválasztva modell, ne keletkezzen hibás vagy félrevezető név. Ilyenkor kérjen megfelelő modellválasztást, vagy engedje meg a manuális névmegadást, amennyiben ez az adott típusnál megfelelő.
+
+2.3. Egyediségi szabályok
+
+- Az "Asset ID" minden eszköznél egyedi maradjon.
+- A "Serial Number" különálló mező legyen.
+- Az Asset Name ne legyen globálisan egyedi, mert például több monitor is viselheti ugyanazt a modellnevet.
+- Az egyedi elnevezést használó eszköztípusoknál – például számítógépeknél – ellenőrizd a név egyediségét az adott típushoz beállított szabályok szerint.
+- Két számítógép véletlenül ne kaphassa meg ugyanazt az Asset Name értéket.
+- Duplikált számítógépnév esetén jelenjen meg egyértelmű hibaüzenet, és a mentés csak a hiba javítása után legyen lehetséges.
+
+Ne feltételezd, hogy minden eszköztípus esetében ugyanaz az elnevezési szabály szükséges.
+
+2.4. Meglévő eszközök
+
+Az új funkció bevezetése ne nevezze át automatikusan a meglévő eszközöket.
+
+- Minden meglévő Asset Name maradjon változatlan.
+- Egy eszköztípus alapértelmezett elnevezési szabályának módosítása ne nevezze át automatikusan a már nyilvántartott eszközöket.
+- Az új elnevezési szabály alapértelmezés szerint az új eszközökre vonatkozzon.
+- A meglévő eszközök neve manuálisan módosítható legyen.
+- Ha egy meglévő eszköz nevét a modellnévből szeretnénk származtatni, ezt külön, kifejezett művelettel lehessen bekapcsolni.
+
+2.5. Megjelenítés és másolás
+
+Az Asset Name jelenjen meg minden szükséges helyen, beleértve az eszköz adatlapját, a listákat, a projekteket és a címke-előnézetet.
+
+Legyen kereshető, szűrhető és másolható.
+
+A másolás ugyanúgy működjön, mint a meglévő Asset ID másolása.
+
+A Serial Number szintén legyen másolható.
+
+Az Asset Name módosítása soha ne változtassa meg az Asset ID-t vagy a Serial Numbert.
+
+3. Settings – Types & Models
+
+Fejleszd tovább a meglévő "Settings → Types & Models" részt.
+
+Lehessen a modelleket eszköztípus alapján szűrni.
+
+Példák:
+
+- All Types
+- Computers
+- Monitors
+- Phones
+- Headsets
+
+Ezek csak példák. A szűrő mindig a rendszerben ténylegesen létező eszköztípusokat használja.
+
+Követelmények:
+
+- Legyen eszköztípus-választó vagy legördülő lista.
+- Kiválasztott típus esetén csak az ahhoz tartozó modellek jelenjenek meg.
+- Lehessen az összes modellt megjeleníteni.
+- A típus szerinti szűrés működjön együtt a kereséssel.
+- Az újonnan létrehozott eszköztípusok automatikusan jelenjenek meg a szűrőben.
+- A meglévő modellek és a hozzájuk tartozó eszközök maradjanak meg.
+- Az Asset Name elnevezési szabálya az eszköztípus megfelelő beállításai között legyen elérhető.
+
+Ne használj előre rögzített, nem módosítható eszköztípuslistát.
+
+4. Projects – Elküldött eszközök, csereeszközök és visszavárás
+
+Egészítsd ki a meglévő Projects modult az eszközök elküldésének és visszavárásának nyilvántartásával.
+
+Fontos: Nem szükséges részletes szállítási adatokat kezelni. Nem cél a futárszolgálat, a feladási dátum, a tervezett érkezés vagy a csomagkövetés részletes nyilvántartása.
+
+A cél az, hogy egyértelműen látható legyen:
+
+- Milyen eszközt vagy eszközöket küldtünk el.
+- Kihez vagy melyik helyszínre küldtük az eszközöket.
+- Csereeszközről van-e szó.
+- Várunk-e vissza egy korábban kiadott eszközt.
+- Pontosan melyik eszközt vagy eszközöket várjuk vissza.
+
+4.1. Elküldött eszközök nyilvántartása
+
+A meglévő projekthez lehessen rögzíteni a kiküldött eszközöket, valamint a címzettet vagy célhelyszínt.
+
+A címzett lehet:
+
+- Egy meglévő munkatárs.
+- Egy iroda vagy más meglévő helyszín.
+
+A kiküldéshez tartozó információk:
+
+- Kiküldött eszköz vagy eszközök.
+- Címzett munkatárs vagy célhelyszín.
+- Annak jelölése, hogy a kiküldés csereeszköznek minősül-e.
+- Megjegyzés, ha szükséges.
+
+A már meglévő eszköz- és személykezelési funkciókat használd újra. Ne hozz létre külön, párhuzamos eszköz- vagy személynyilvántartást.
+
+Ne vezess be külön, részletes szállításkezelési folyamatot, és ne tegyél kötelezővé futáradatokat, csomagkövetési azonosítót vagy tervezett feladási és érkezési dátumot.
+
+4.2. Csereeszköz és visszavárás kezelése
+
+Ha egy eszközt csereeszközként küldünk ki, lehessen ezt külön megjelölni.
+
+Csereeszköz esetén lehessen rögzíteni, hogy melyik korábban kiadott eszközt várjuk vissza.
+
+Példa:
+
+- Kiküldött csereeszköz: PC-HU-015.
+- Címzett: egy Home Office-ban dolgozó munkatárs.
+- Visszavárt eszköz: PC-HU-008.
+- Visszavárás állapota: Awaiting Return.
+
+Egy kiküldéshez több visszavárt eszköz is tartozhasson, ha erre szükség van.
+
+A visszavárt eszközt a meglévő készletből lehessen kiválasztani, így egyértelmű maradjon, pontosan melyik eszköz visszaérkezését várjuk.
+
+A visszavárás állapotai legalább az alábbiak legyenek:
+
+- "Not Required" – nincs szükség visszavételre.
+- "Awaiting Return" – az eszközt visszavárjuk.
+- "Returned" – az eszköz visszaérkezett.
+
+Ha az eszköz visszaérkezik, a meglévő visszavételi folyamatot használd. A visszaérkezés ne csak a visszavárás jelölését frissítse, hanem a meglévő készletkezelési és naplózási folyamatokkal is legyen összhangban.
+
+A visszavárás állapota különüljön el a projekt általános státuszától. Egy projekt akkor is lehet befejezett, ha még várunk vissza egy eszközt.
+
+4.3. A meglévő Projects funkciók megőrzése
+
+A jelenlegi projektkezelés maradjon működőképes. A fejlesztés ezt egészítse ki az eszközök kiküldésének, a csereeszközöknek és a visszavárásnak a nyilvántartásával.
+
+A meglévő projektlétrehozási, eszköz-előkészítési, hozzárendelési, checkout- és dokumentációs folyamatokat ne cseréld le.
+
+5. Projects – Projekt előkészítése ismert és ismeretlen munkatársakkal
+
+A meglévő projektlétrehozási folyamat megfelelően működik, ezért azt meg kell tartani.
+
+Továbbra is lehessen:
+
+- Meglévő munkatársat hozzáadni a projekthez.
+- A munkatárshoz konkrét eszközöket rendelni a projektben.
+- A meglévő módon kezelni az eszközök előkészítését és kiadását.
+
+Új lehetőségként legyen elérhető projekt létrehozása akkor is, ha a leendő munkatársak neve még nem ismert.
+
+5.1. Projekt létrehozása ismert munkatárs nélkül
+
+Lehessen projektet létrehozni konkrét munkatárs hozzárendelése nélkül, ha például több új munkatárs érkezése várható, de a nevük még nem áll rendelkezésre.
+
+A projektben lehessen megadni:
+
+- Projekt neve és leírása.
+- A szükséges eszközök típusa és tervezett mennyisége.
+- Szükséges kiegészítők és tartozékok checklistje.
+- Cél-Service, ha már ismert.
+- Céliroda vagy Home Office, ha már ismert.
+- Tervezett befejezési dátum.
+- Megjegyzések és ticketazonosítók.
+- Előkészítési állapot és előrehaladás.
+
+Példa: öt új munkatárs érkezik, de a nevük még nem ismert. Létrehozható egy projekt az öt számítógép, öt monitor, öt billentyűzet és öt egér előkészítésére.
+
+A kábelek és hasonló kiegészítők egyszerű checklist-elemként is kezelhetők, ha nem szükséges őket egyedi készletelemként nyilvántartani.
+
+Amikor a munkatársak adatai ismertté válnak, lehessen őket hozzáadni a projekthez, és a meglévő folyamat szerint hozzájuk rendelni a megfelelő eszközöket.
+
+5.2. Tervezett mennyiségek és konkrét eszközök
+
+A projektben különüljön el a szükséges eszközök megadása és a konkrét raktári eszközök kiválasztása.
+
+Tervezett mennyiség: megadjuk, hogy hány darab eszközre lesz szükségünk, például öt számítógépre és öt monitorra. Ehhez még nem kell konkrét Asset ID-t választani.
+
+Kiválasztott eszközök: amikor eldöntöttük, hogy a készletből pontosan mely számítógépeket és monitorokat használjuk fel, azokat hozzáadjuk a projekthez.
+
+Tényleges eszközkiadás: az eszközök csak akkor kerüljenek ténylegesen munkatárshoz, amikor a meglévő kiadási folyamatot végrehajtjuk.
+
+Ez a három lépés ne legyen összemosva. A tervezett mennyiség megadása vagy az eszköz projektbe történő előkészítése önmagában ne módosítsa az eszköz tényleges hozzárendelését, és ne jelentsen checkoutot.
+
+A projekt előrehaladása és checklistje maradjon követhető a kollégák számára.
+
+5.3. Checklist és előrehaladás
+
+A projekt checklistje legyen látható a többi jogosult felhasználó számára is, hogy a kollégák ellenőrizhessék az aktuális állapotot.
+
+A checklist elemeit lehessen készre vagy folyamatban lévőre állítani.
+
+A kábelek és hasonló kiegészítők egyszerű checklist-elemként működjenek, ne kelljen őket külön raktári eszközként nyilvántartani, kivéve, ha a felhasználó kifejezetten ilyen eszköztípust állít be.
+
+A projekt előkészítése során ne történjen automatikus checkout.
+
+5.4. Projekt véglegesítése és tényleges eszközkiadás
+
+A meglévő projektbefejezési és eszközkiadási folyamatot tartsd meg.
+
+Amikor a felhasználó a projekt befejezését vagy a tényleges eszközkiadást indítja el:
+
+- Ellenőrizd a kiválasztott eszközök rendelkezésre állását.
+- Ellenőrizd, hogy a hozzárendelések és a mennyiségek megfelelnek-e egymásnak.
+- Jelezd, ha hiányzik szükséges munkatársi adat vagy eszköz.
+- A módosítások végrehajtása előtt jeleníts meg megerősítő ablakot.
+- A tényleges eszközkiadáshoz a meglévő checkout-folyamatot használd.
+- Generáld le a meglévő átvételi dokumentációt.
+- Frissítsd az érintett eszközök státuszát és hozzárendeléseit.
+- Naplózd a műveletet.
+
+Javasolt megerősítő üzenet:
+
+"Are you sure you want to finalize this project and check out the selected assets? This action will update asset assignments and generate the relevant documentation."
+
+A "Cancel" gomb megnyomásakor a hozzárendelések és a készlet változatlanok maradjanak.
+
+Az előkészítési checklist befejezése ne jelentse automatikusan az eszközök kiadását.
+
+A meglévő, munkatársakhoz kötött projektlétrehozás és eszközhozzárendelés továbbra is ugyanúgy működjön. Az ismert munkatárs nélküli előkészítés új lehetőség legyen, ne a meglévő működés helyettesítője.
+
+6. Return to Stock – Megerősítés minden esetben
+
+A "Return to Stock" funkció minden esetben kérjen megerősítést, amikor egy eszköz ténylegesen visszakerül a raktárba.
+
+Ez vonatkozzon:
+
+- Munkatárstól visszavett eszközökre.
+- Irodában elhelyezett eszközökre.
+- Más támogatott helyszínről visszavett eszközökre.
+
+Javasolt megerősítő üzenet:
+
+"Are you sure you want to return this asset to stock? Its current location and assignment will be updated."
+
+A megerősítő ablak mutassa az eszköz Asset Name és Asset ID értékét, valamint az aktuális helyét vagy hozzárendelt munkatársát, ha ezek ismertek.
+
+Cancel esetén semmilyen adat ne változzon.
+
+Megerősítés után használd a meglévő készletmozgatási és visszavételi folyamatot, őrizd meg a visszavételi dokumentációt, és naplózd a műveletet.
+
+Ez a megerősítés nem jelenti azt, hogy minden irodához vagy asztalhoz rendelt eszközt kötelező visszavenni a raktárba, mielőtt másik munkatárshoz kerülhet. A közvetlen hozzárendelésre vonatkozó szabályokat a 12. pont tartalmazza.
+
+7. Overview – Eszközök életkor szerinti összesítése
+
+A jelenlegi Overview oldalon a garancia lejáratára figyelmeztető részt cseréld le az eszközök életkor szerinti összesítésére.
+
+A garancialejárat figyelése ehhez a funkcióhoz nem szükséges.
+
+7.1. Állítható életkori küszöb
+
+Legyen beállítható az eszközök életkori küszöbértéke.
+
+- Alapértelmezett érték: 5 év.
+- A felhasználó módosíthassa más értékre.
+
+A beállítás a Settings menüben vagy az Overview megfelelő beállítási részén legyen elérhető.
+
+Az életkort megbízható beszerzési dátum vagy üzembe helyezési dátum alapján számítsd ki.
+
+Ne használd az eszköz utolsó módosításának vagy munkatárshoz rendelésének dátumát.
+
+Ha egy eszközhöz nem áll rendelkezésre érvényes dátum, ne számíts hozzá hibás életkort. Hagyd ki az összesítésből, vagy egyértelműen jelezd, hogy az életkora ismeretlen.
+
+7.2. Csoportosítás modell szerint
+
+Az Overview oldalon ne jelenjen meg minden régi eszköz külön sorban.
+
+A rendszer modell szerint csoportosítsa az eszközöket, és mutassa a megfelelő darabszámot.
+
+Példa:
+
+Modell| Életkori küszöb| Darabszám
+Dell P2422H| 5+ év| 12
+HP EliteBook 840 G7| 5+ év| 7
+
+Ezek csak szemléltető adatok.
+
+Követelmények:
+
+- Jelenjen meg a modell neve.
+- Jelenjen meg a küszöbértéket elérő eszközök száma.
+- A modell neve legyen kattintható.
+- Kattintásra jelenjen meg az adott modellhez tartozó, életkori feltételnek megfelelő eszközök listája.
+- Használd újra a meglévő eszközlistát és kiválasztási funkciókat.
+
+Távolítsd el a "Most Common Models" szekciót az Overview oldalról.
+
+8. Asset Label Generation – Címkék létrehozása és nyomtatása
+
+Készíts funkciót a fizikai eszközökre ragasztható azonosítócímkék generálására és nyomtatására.
+
+A címkék az Avery L4732REV sablonhoz igazodjanak.
+
+8.1. Eszközök kiválasztása
+
+A felhasználó tudjon címkét generálni:
+
+- Egyetlen kiválasztott eszközhöz.
+- Több, egyenként kijelölt eszközhöz.
+- Több, szűrés alapján kiválasztott eszközhöz, ha kifejezetten ezt a lehetőséget választja.
+
+Legyen egyértelmű "Generate Labels" művelet.
+
+8.2. A címke tartalma
+
+Minden címkén szerepeljen:
+
+- QR-kód.
+- Serial Number szövegesen.
+- Asset Name.
+- Model Name.
+
+A QR-kód pontosan az adott eszköz Serial Number értékét kódolja.
+
+Ne az Asset ID vagy az Asset Name kerüljön a QR-kódba.
+
+Példa:
+
+- Asset Name: "PC-HU-001"
+- Modell: "HP EliteBook 840 G7"
+- Serial Number: "5CG1234567"
+- QR-kód tartalma: "5CG1234567"
+
+Ha egy eszközhöz nem tartozik Serial Number, a rendszer jelezze ezt nyomtatás előtt.
+
+8.3. Avery L4732REV nyomtatási elrendezés
+
+A nyomtatási nézet megvalósítása előtt ellenőrizd az Avery L4732REV hivatalos sablonméreteit, beleértve a címkék méretét, a margókat, a címkék közötti távolságot és az ív elrendezését.
+
+Követelmények:
+
+- Nyomtatási előnézet.
+- Egyedi és tömeges címkegenerálás.
+- Több címkeív kezelése.
+- Pontos igazítás és méretezés.
+- A weboldal navigációja, gombjai és egyéb, nyomtatáshoz nem szükséges elemei ne jelenjenek meg a nyomtatott oldalakon.
+- A nyomtatás megszakítható legyen az aktuális kijelölés elvesztése nélkül.
+
+Használj a jelenlegi projekttel kompatibilis, kliensoldali QR-kód-generáló könyvtárat. Ha már van ilyen a projektben, használd újra.
+
+Ellenőrizd, hogy a QR-kódok beolvashatók, és a megfelelő Serial Number értéket tartalmazzák.
+
+9. Dark Mode és Light Mode
+
+Legyen kapcsoló a világos és sötét megjelenés között.
+
+A két téma:
+
+- Light Mode.
+- Dark Mode.
+
+A kiválasztott téma következetesen érvényesüljön az alábbi részeken:
+
+- Overview.
+- Assets.
+- People.
+- Projects.
+- Floorplan.
+- Settings.
+- Logs.
+- Űrlapok, táblázatok, párbeszédablakok, legördülő listák és címke-előnézetek.
+
+A felhasználó választása maradjon meg az oldal újratöltése után, amennyiben ezt a meglévő böngészőoldali tárolás lehetővé teszi.
+
+Mindkét témában biztosíts megfelelő kontrasztot és olvashatóságot.
+
+A kinyomtatott címkék megjelenését a weboldal kiválasztott témája ne befolyásolja hátrányosan.
+
+10. Angol nyelv és alkalmazásnév
+
+A weboldal teljes felhasználói felülete angol nyelvű legyen.
+
+Ez minden felhasználó által látható szövegre vonatkozik, beleértve:
+
+- Navigáció és menük.
+- Mezőnevek.
+- Gombok.
+- Validációs üzenetek.
+- Figyelmeztetések.
+- Megerősítő ablakok.
+- Üres állapotok.
+- Naplókategóriák.
+
+Az alkalmazás neve mindenhol:
+
+"TC IT Asset Management"
+
+Az "IT Raktár" elnevezést ne használd.
+
+11. Configurable Work Modes – Munkavégzési módok beállítása
+
+A Settings modulban lehessen kezelni a munkatársak munkavégzési módjait.
+
+Alapértelmezett értékek:
+
+- Onsite.
+- Hybrid.
+- WFH.
+
+Lehessen új munkavégzési módokat hozzáadni, a meglévőket szerkeszteni és deaktiválni.
+
+A People modul és a kapcsolódó szűrők a beállított értékeket használják.
+
+Egy már használt munkavégzési mód deaktiválása ne törölje a korábbi vagy meglévő munkatársi adatokat.
+
+12. Asset Assignment – Eszközkiadás, helyszín-hozzárendelés és megerősítés
+
+Vizsgáld át a meglévő Asset Assignment működését és az összes olyan felületet, ahonnan eszközt lehet munkatárshoz rendelni.
+
+Fontos: Egy irodához, asztalhoz vagy más helyszínhez rendelt eszközt lehessen közvetlenül munkatárshoz rendelni anélkül, hogy előtte kötelezően vissza kellene venni a raktárba.
+
+Valós használati eset, hogy egy irodai asztalnál található számítógépet közvetlenül egy új vagy meglévő munkatárs kap meg. Ilyenkor a raktári visszavétel, majd az újbóli kiadás csak felesleges pluszlépés lenne.
+
+A közvetlen hozzárendelés előtt a rendszer figyelmeztessen, és kérjen megerősítést. A meglévő hozzárendelési és naplózási logikát használd újra.
+
+12.1. Eszköz hozzárendelése irodából vagy asztaltól
+
+Ha egy eszköz jelenleg egy irodához, asztalhoz vagy más helyszínhez van rendelve, és a felhasználó egy munkatárshoz szeretné hozzárendelni, a rendszer ne blokkolja automatikusan a műveletet.
+
+Ehelyett jelenítsen meg egy megerősítő figyelmeztetést.
+
+A figyelmeztetés egyértelműen mutassa:
+
+- Az eszköz Asset ID-jét.
+- Az eszköz Asset Name értékét.
+- Az eszköz jelenlegi helyét, például az irodát vagy asztalt.
+- A kiválasztott új munkatársat.
+- Azt, hogy a megerősítés az aktuális helyszín-hozzárendelést munkatárshoz rendelésre módosítja.
+
+Javasolt angol nyelvű megerősítő ablak:
+
+Assign Asset to Employee?
+
+"This asset is currently assigned to an office or desk. Do you want to reassign it directly to the selected employee?"
+
+Gombok:
+
+- "Cancel" – a művelet megszakítása.
+- "Confirm Assignment" – a hozzárendelés végrehajtása.
+
+12.2. A megerősítés működése
+
+Ha a felhasználó a "Cancel" lehetőséget választja:
+
+- Ne változzon meg az eszköz hozzárendelése.
+- Ne változzon meg a helyszín-hozzárendelés.
+- Ne jöjjön létre checkout vagy más módosító tranzakció.
+- Ne keletkezzen olyan naplóbejegyzés, amely végrehajtott hozzárendelést jelez.
+
+Ha a felhasználó megerősíti a műveletet:
+
+- Az eszköz a kiválasztott munkatárshoz kerüljön.
+- A korábbi helyszín-hozzárendelés a meglévő adatmodell és működés szerint frissüljön.
+- A módosítás a meglévő naplózási és dokumentációs folyamatokat használja.
+- Ne jöjjön létre duplikált naplóbejegyzés.
+- Az eszköz korábbi hozzárendelésének története maradjon meg, amennyiben azt a meglévő rendszer kezeli.
+
+Ne követelj meg kötelező raktári visszavételt és újrakiadást, ha az eszköz csak egy irodához vagy asztalhoz van rendelve, és közvetlenül munkatárshoz kerül.
+
+A közvetlen hozzárendelés során ne keletkezzen szükségtelen köztes "In Stock" állapot. A művelet közvetlenül, a meglévő adatmodellnek megfelelően frissítse a hozzárendelést.
+
+12.3. Másik munkatárshoz rendelt eszközök kezelése
+
+A helyszínhez rendelt eszközök közvetlen hozzárendelése nem jelenti azt, hogy a másik munkatárshoz kiadott eszközök esetében is figyelmen kívül hagyható a meglévő visszavételi folyamat.
+
+Ha az eszköz jelenleg egy másik munkatárshoz van rendelve:
+
+- A rendszer mutassa meg a jelenlegi munkatársat.
+- Ne írja felül csendben a meglévő hozzárendelést.
+- Használja a meglévő visszavételi és újrakiadási folyamatot, illetve az annak megfelelő, már meglévő szabályokat.
+- Őrizze meg a korábbi hozzárendelés és a visszavétel dokumentációját.
+
+Ne kezeld az irodához rendelt eszközt úgy, mintha egy másik munkatárshoz lenne kiadva. A két eset eltérő műveletet igényel.
+
+12.4. Projekthez rendelt vagy előkészített eszközök
+
+Ha az eszköz egy projekthez van előkészítve vagy lefoglalva, azt is ellenőrizd.
+
+Ne engedj észrevétlenül egymásnak ellentmondó hozzárendeléseket.
+
+Ha az eszköz egy másik projekthez van előkészítve, a rendszer jelenítse meg a kapcsolódó információkat, és a meglévő szabályok szerint kezelje az ütközést.
+
+A projekt-előkészítés vagy -foglalás önmagában ne jelentsen tényleges checkoutot.
+
+12.5. Minden hozzárendelési felület egységes kezelése
+
+Ellenőrizd az összes meglévő helyet, ahonnan Asset Assignment indítható, például:
+
+- Assets lista vagy eszközrészletek.
+- Munkatárs adatlapja.
+- Projects modul véglegesítése.
+- Egyéb meglévő hozzárendelési felületek.
+
+Ahol ugyanaz a hozzárendelési művelet történik, ott ugyanazokat az ellenőrzéseket és szabályokat használd. Ne legyen olyan felület, ahol a figyelmeztetés vagy a hozzárendelési védelem kimarad.
+
+A meglévő funkciókat, dokumentumokat és naplózást használd újra. Ne építs külön, párhuzamos hozzárendelési rendszert.
+
+13. Logs – Naplózás
+
+Használd tovább a meglévő naplózási rendszert.
+
+A most bevezetett műveletek is kerüljenek be a megfelelő naplóba:
+
+- Asset Name módosítása.
+- Eszköz létrehozása és módosítása.
+- Eszközök mozgatása.
+- Eszközök kiadása és visszavétele.
+- Közvetlen hozzárendelés irodából vagy asztaltól munkatárshoz.
+- Projekt-előkészítés és projektvéglegesítés.
+- Kiküldött eszközök és visszavárások állapotváltozásai.
+- Munkavégzési módok beállításainak módosítása.
+- Eszköztípusok és modellek beállításainak módosítása.
+
+Ahol lehetséges, őrizd meg a meglévő naplókategóriákat:
+
+- Created.
+- Updated.
+- Moved.
+- Checkout.
+- Returned.
+- Project activity.
+
+Egyetlen művelet ne hozzon létre indokolatlanul több azonos naplóbejegyzést.
+
+A megszakított vagy Cancel műveletek ne jelenjenek meg végrehajtott eszközmódosításként.
+
+14. Fejlesztési és tesztelési sorrend
+
+A fejlesztést az alábbi sorrendben végezd:
+
+1. Vizsgáld meg a meglévő projektet és annak működő funkcióit.
+2. Azonosítsd a módosítandó komponenseket, fájlokat, adatstruktúrákat és meglévő folyamatokat.
+3. Valósítsd meg az Asset Name mezőt és a típusonként beállítható elnevezési szabályokat.
+4. Bővítsd a Types & Models modulszűrését.
+5. Egészítsd ki a Projects modult az egyszerű eszközkiküldési, csereeszköz- és visszavárási funkciókkal.
+6. Egészítsd ki a Projects modult ismert munkatárs nélküli előkészítéssel úgy, hogy a meglévő, munkatárshoz kötött projektfolyamat változatlanul működjön.
+7. Ellenőrizd a Return to Stock megerősítését és a meglévő visszavételi folyamatot.
+8. Cseréld le az Overview garanciafigyelmeztetését modell szerint csoportosított, életkoralapú összesítésre.
+9. Készítsd el a címkegenerálást és az ellenőrzött Avery L4732REV nyomtatási elrendezést.
+10. Ellenőrizd a Dark Mode és Light Mode működését.
+11. Valósítsd meg a munkavégzési módok konfigurálását.
+12. Egészítsd ki az Asset Assignment működését a helyszínről történő közvetlen hozzárendeléssel, megerősítéssel és a másik munkatárshoz tartozó eszközök védelmével.
+13. Ellenőrizd a naplózást és a meglévő funkciók változatlan működését.
+14. Futtasd le az elérhető teszteket, és ellenőrizd manuálisan azokat a funkciókat, amelyekre nincs automatizált teszt.
+
+14.1. Elfogadási feltételek
+
+A fejlesztés befejezése előtt ellenőrizd, hogy:
+
+- Az Asset Name eszköztípusonként automatikus modellnévvel vagy manuális névvel működik.
+- Több azonos monitor ugyanazt az Asset Name értéket használhatja.
+- A számítógépek Asset Name értéke egyedileg megadható és ellenőrizhető.
+- Az Asset ID minden eszköznél egyedi marad.
+- A modell módosítása nem írja felül a manuálisan megadott neveket.
+- A meglévő eszközök neve nem változik meg váratlanul.
+- Az Asset Name, Asset ID és Serial Number másolható.
+- A modellek eszköztípus alapján szűrhetők, és a szűrés együtt működik a kereséssel.
+- A Projects modulban rögzíthetők a kiküldött eszközök és címzettjeik.
+- Csereeszköz esetén megadhatók a visszavárt eszközök és követhető a visszavárás állapota.
+- A visszavárás állapota külön kezelhető a projekt általános státuszától.
+- A projektek ismert munkatárs nélkül is létrehozhatók és előkészíthetők.
+- A meglévő, munkatárshoz kötött projektlétrehozás és hozzárendelés továbbra is működik.
+- A tervezett mennyiségek elkülönülnek a konkrétan kiválasztott eszközöktől és a tényleges eszközkiadástól.
+- A projekt véglegesítése megerősítést kér, és a meglévő dokumentációs folyamatot használja.
+- A Return to Stock mind munkatárstól történő visszavételnél, mind irodai eszköz esetén megerősítést kér.
+- Az Overview modell szerint csoportosítja a megadott életkori küszöböt elérő eszközöket.
+- A garanciafigyelmeztetés és a Most Common Models szekció nem jelenik meg az Overview oldalon.
+- A címkegenerálás egyedi és tömeges kijelöléssel is működik.
+- A QR-kód a megfelelő Serial Number értéket tartalmazza.
+- A címkék a ténylegesen ellenőrzött Avery L4732REV elrendezéshez igazodnak.
+- A Dark Mode és Light Mode következetesen működik.
+- A teljes felhasználói felület angol nyelvű.
+- A munkavégzési módok konfigurálhatók.
+- Az irodához vagy asztalhoz rendelt eszköz közvetlenül munkatárshoz rendelhető, ha a felhasználó megerősíti a műveletet.
+- A közvetlen helyszínről történő hozzárendeléshez nem szükséges kötelező raktári visszavétel és újrakiadás.
+- Cancel esetén nem változik meg az eszköz hozzárendelése, és nem jön létre végrehajtott műveletet jelző naplóbejegyzés.
+- A másik munkatárshoz rendelt eszköz nem rendelhető át csendben; a meglévő visszavételi folyamatot kell használni.
+- A projekthez előkészített eszköz nem válik automatikusan kiadott eszközzé.
+- A közvetlen hozzárendelés és a visszavétel naplózása nem hoz létre duplikált bejegyzéseket.
+- A meglévő Floorplan, készletkezelés, checkout, visszavételi dokumentáció, projektek és naplózás továbbra is működik.
+- Az alkalmazás továbbra is használható a jelenlegi HTML-alapú prototípusként, .NET 10, új backend vagy aktív SQL-adatbázis bevezetése nélkül.
+
+14.2. Fejlesztés utáni jelentés
+
+A fejlesztés végén készíts összefoglalót az alábbiakról:
+
+- Milyen módosítások készültek el.
+- Mely fájlok változtak.
+- Milyen teszteket futtattál le ténylegesen.
+- Milyen manuális ellenőrzéseket végeztél.
+- Milyen hibák vagy hiányosságok maradtak.
+- Mely követelmények nem valósultak meg, és miért.
+
+Ne állítsd, hogy egy funkció elkészült vagy tesztelve lett, ha ezt ténylegesen nem valósítottad meg és nem ellenőrizted.
+
+Végső utasítás: A fejlesztési terv magyar nyelvű, de a weboldal teljes felhasználói felületét angolra kell fordítani. Ez vonatkozik minden menüre, gombra, mezőnévre, figyelmeztetésre, hibaüzenetre, megerősítő ablakra, státuszra és naplóbejegyzésre. Az alkalmazás neve mindenhol "TC IT Asset Management" legyen. A fordítás ne törje el a meglévő funkciókat.
