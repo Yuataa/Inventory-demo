@@ -1,0 +1,49 @@
+Update / patch lista
+
+Új
+
+Dashboard: új csempék: Total, Office / Onsite, Assigned, Storage / Spare, Faulty / Aged, Awaiting Return, típusonkénti bontással. A számok és a bontás elemei előszűrt listát nyitnak.
+Dashboard testreszabása (Settings): láthatóság, sorrend, méret, bontás, alapszűrők, Aged-küszöb (alapból 5 év) és visszaállítás.
+Asset Name: a Model Name mellett, típusonkénti szabállyal (modellnév vagy egyedi név, opcionális egyediség).
+User Status: Active / Suspended / Leaver, a Work Mode-tól külön. Ticketek személyenként, státuszváltás megerősítéssel és a következmények kiírásával.
+Assets Awaiting Return: eszközönkénti visszavétel vagy „Not Required”. A kilépő és a csereprojekt ugyanazt a nyilvántartást használja.
+Projects:
+személy nélküli igény, a személyek később köthetők hozzá
+külön tervezett, kiválasztott és kiadott darabszám
+cél Service és helyszín
+szállítási nyilvántartás
+csereeszközök visszavárása
+Work Modes: szerkeszthető a Settingsben, módonként saját Floorplan-szabállyal.
+QR-címkék (Avery L4732REV): előnézet, több ív, kezdőpozíció és kalibráció. A QR csak a Serial Numbert tartalmazza, internet nélkül is működik.
+Világos/sötét mód: kapcsoló a fejlécben, a választás megmarad.
+
+Módosult
+
+Név és nyelv: a név TC IT Asset Management. Minden új és meglévő felirat angol, a jegyzőkönyv-sablon is.
+Eszközlista: új szűrők: nézet, iroda, dolgozó, Work Mode, kategória, életkor. A Quick Move listája is szűrhető Service, Work Mode és iroda szerint.
+Hozzárendelés: irodából vagy asztaltól közvetlenül személyhez adható, raktári köztes lépés nélkül.
+Figyelmeztetések: minden hozzárendelő felületen azonos a szabály másik személy eszközére és projektütközésre.
+Return to Stock: egységes ablak célhellyel és állapottal.
+Types & Models: egy helyen, a modellek típus és név szerint is szűrhetők.
+Egyéb: új Faulty eszközállapot, dátumok ÉÉÉÉ-HH-NN formában, új jegyzőkönyvszám-előtagok (HO, RT, SW).
+
+Javítva: az eszközűrlapon a típus váltása elveszíthette a szerkesztést.
+
+Tesztek
+Elfogadási ellenőrzések: 58 automatizált ellenőrzés futott a böngészőben, mind sikeres. Két ellenőrzés elsőre hibát jelzett, de az a teszt hibája volt, újrafuttatva átment.
+Teszt közben javított hibák: az első indítás elromlott a demo adatokkal, a megerősítő ablak nem jelzett vissza, a hosszú sorozatszámok QR-kódja pedig hibás lett.
+QR-kód: 11 különböző hosszal sikeres, saját visszaolvasóval.
+Nyelv: 24 képernyőn nem maradt magyar szöveg (a neveken kívül). A személyadatlap jobban ellenőrizve van, mint a párbeszédablakok, ezekben csak a forrásszöveget kerestem át.
+Bemutató: a 17 lépéses bemutató hibamentesen lefutott, és visszaállította az adatokat.
+Megnézett képernyők: sötét módú Overview, Faulty / Aged lista és címke-előnézet.
+Csak részben ellenőrzött: a korábbi 72 tesztet nem futtattam újra, a fontos folyamatokat az új ellenőrzések fedik le.
+Mit nézz meg bemutató előtt
+Címke margói: a méretet (35,6 × 16,9 mm) és a 80 címke/ív mennyiséget a termékadatok megerősítik. Az 5 × 16-os elrendezés ebből következik, a margók viszont számított értékek. Nyomtass egy próbát sima papírra, és ha kell, igazítsd a kalibrációt.
+QR-beolvasás: próbáld ki telefonnal is. Külső dekódolót nem futtathattam, a beépített BarcodeDetector pedig nem volt elérhető.
+Valódi egeres húzás, .xlsx import és dupla kattintásos megnyitás: továbbra sincs kipróbálva.
+Eltérések a tervtől
+Spare: nincs külön érték, a Storage / Spare egy csoport.
+User Status értékek: a három státusz fix, nem szerkeszthető.
+Megerősítő ablakok: a közvetlen hozzárendelésnél Cancel/Confirm gombos ablak van. Több más helyen, például a projekt lezárásánál, a böngésző OK/Cancel ablaka maradt.
+Jegyzőkönyvek: a sablon angol, ezt jogilag érdemes átnézetni. A már elmentett magyar nyilatkozat a Settings → Protocols alatt cserélhető le a „Restore default text” gombbal. A régi naplóbejegyzések magyarul maradnak.
+Adatok: továbbra is böngészőnként tárolódnak, a megosztás JSON-mentéssel megy.
