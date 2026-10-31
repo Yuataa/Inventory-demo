@@ -1,5 +1,19 @@
 'use strict';
-/* Útválasztás (#/…), navigáció és indítás */
+/* Routing (#/…), navigation and startup */
+
+function currentTheme(){
+  const t = document.documentElement.dataset.theme;
+  return t || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+}
+function applyTheme(t){
+  if (t) document.documentElement.dataset.theme = t;
+  const b = $('#themeBtn'); if (b) b.textContent = currentTheme() === 'dark' ? '☀️ Light' : '🌙 Dark';
+}
+function toggleTheme(){
+  const t = currentTheme() === 'dark' ? 'light' : 'dark';
+  try { localStorage.setItem(THEME_KEY, t); } catch(e) {}
+  applyTheme(t);
+}
 
 let lastRoute = '';
 function render(){
@@ -32,7 +46,11 @@ function render(){
     case 'docs': v.innerHTML = viewDocs(params);
       $('#df').addEventListener('change', e => { location.hash = '#/docs' + (e.target.value ? '?f=' + e.target.value : ''); }); break;
     case 'log': v.innerHTML = viewLogs(params); bindLogs(params); break;
-    case 'settings': v.innerHTML = viewSettings(parts[1], parts[2]); if (parts[1] === 'fields' && parts[2]) bindFieldSet(parts[2]); break;
+    case 'settings': v.innerHTML = viewSettings(parts[1], parts[2], params);
+      if (parts[1] === 'fields' && parts[2]) bindFieldSet(parts[2]);
+      if (parts[1] === 'types') bindModelFilters();
+      if (parts[1] === 'dashboard') bindDashSettings();
+      break;
     case 'tour': v.innerHTML = viewDashboard(); setTimeout(startTour, 300); break;
     default: v.innerHTML = viewDashboard();
   }
@@ -41,7 +59,7 @@ function render(){
 }
 function renderUserChip(){
   const u = currentUser(), el = $('#userChip');
-  if (el) el.innerHTML = u ? `👤 ${esc(u)}` : '👤 Név megadása';
+  if (el) el.innerHTML = u ? `👤 ${esc(u)}` : '👤 Set your name';
 }
 
 window.addEventListener('hashchange', render);
@@ -51,6 +69,7 @@ $('#importFile').addEventListener('change', e => { const f = e.target.files[0]; 
 // sticky bars sit below the (wrapping) header
 const setHdr = () => document.documentElement.style.setProperty('--hdr', document.querySelector('header').offsetHeight + 'px');
 window.addEventListener('resize', setHdr);
+try { applyTheme(localStorage.getItem(THEME_KEY)); } catch(e) { applyTheme(null); }
 bindSearch();
 renderUserChip();
 setHdr();

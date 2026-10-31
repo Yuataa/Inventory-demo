@@ -1,64 +1,91 @@
 'use strict';
-/* IT Raktár – adatréteg: konstansok, tárolás (localStorage + IndexedDB), v1 → v2 migráció, demo adatok, helyek és naplózás.
-   Szerver nélkül fut: minden adat a böngészőben marad. */
+/* TC IT Asset Management – data layer: constants, storage (localStorage + IndexedDB), migration, demo data, locations and logging.
+   Runs without a server: all data stays in the browser. */
 
 const KEY = 'itraktar_v2';
 const KEY_V1 = 'itraktar_v1';
 const TOUR_BACKUP = KEY + '_tour_backup';
 const USER_KEY = 'itraktar_user';
 
-const MODES = ['Onsite', 'Hybrid', 'WFH'];
-const MODE_ICON = {Onsite:'🏢', Hybrid:'🔀', WFH:'🏠'};
+const THEME_KEY = 'itraktar_theme';
+
+// work modes are configurable (db.modes); behavior drives the floorplan rules, so a renamed mode keeps working
+const DEFAULT_MODES = [
+  {id:'Onsite', name:'Onsite', icon:'🏢', behavior:'onsite'},
+  {id:'Hybrid', name:'Hybrid', icon:'🔀', behavior:'hybrid'},
+  {id:'WFH',    name:'WFH',    icon:'🏠', behavior:'wfh'},
+];
+const USER_STATUS = {Active:{cls:'ok'}, Suspended:{cls:'warn'}, Leaver:{cls:'bad'}};
+const RETURN_STATE = {notRequired:'Not Required', awaiting:'Awaiting Return', returned:'Returned', cancelled:'Cancelled'};
+const SHIP_STATUS = ['Preparing', 'Sent', 'Delivered'];
 const STATUS = {
-  ok:      {label:'Működik',       cls:'ok'},
-  repair:  {label:'Javítás alatt', cls:'warn'},
-  lost:    {label:'Elveszett',     cls:'bad'},
-  retired: {label:'Selejtezett',   cls:'bad'},
+  ok:      {label:'Working',   cls:'ok'},
+  faulty:  {label:'Faulty',    cls:'bad'},
+  repair:  {label:'In Repair', cls:'warn'},
+  lost:    {label:'Lost',      cls:'bad'},
+  retired: {label:'Retired',   cls:'bad'},
 };
-const ROOM_KINDS = {office:'🏢 Iroda', server:'🗄️ Szerverszoba', storage:'📦 Raktárhelyiség', meeting:'👥 Tárgyaló'};
+const ROOM_KINDS = {office:'🏢 Office', server:'🗄️ Server room', storage:'📦 Storage room', meeting:'👥 Meeting room'};
 const OBJ = {
-  desk: {label:'Asztal', w:160, h:90},
+  desk: {label:'Desk', w:160, h:90},
   rack: {label:'Rack',   w:90,  h:150},
-  door: {label:'Ajtó',   w:70,  h:12},
+  door: {label:'Door',  w:70,  h:12},
 };
-const FIELD_KINDS = {text:'Szöveg', number:'Szám', date:'Dátum', bool:'Igen/nem', select:'Legördülő lista'};
-const LOG_CATS = {created:'Created', updated:'Updated', moved:'Moved', checkout:'Checkout', returned:'Returned', project:'Project activity'};
-const PROJECT_STATUS = {planning:'Tervezés', progress:'Előkészítés alatt', ready:'Átvételre kész', completed:'Befejezve', cancelled:'Megszakítva'};
+const FIELD_KINDS = {text:'Text', number:'Number', date:'Date', bool:'Yes/no', select:'Dropdown list'};
+const LOG_CATS = {created:'Created', updated:'Updated', moved:'Moved', checkout:'Checkout', returned:'Returned', project:'Project activity', status:'User status', config:'Settings'};
+const PROJECT_STATUS = {planning:'Planned', progress:'In Progress', ready:'Ready', completed:'Completed', cancelled:'Cancelled'};
 const PREP_STATUS = ['', 'Waiting for Erase', 'Erase done', 'Imaging', 'Ready'];
 // accessories tracked only as a checklist – never inventory, never an Asset ID
 const CHECKLIST = [['keyboard', 'Keyboard'], ['mouse', 'Mouse'], ['lan', 'LAN cable'], ['power', 'Power cable'], ['hdmi', 'HDMI'], ['display', 'Display cable'], ['usbb', 'USB-B']];
 // built-in types; 'pc' and 'monitor' are used by Projects, so they cannot be deleted
 const DEFAULT_TYPES = [
   {id:'monitor', name:'Monitor', icon:'🖥️', system:true},
-  {id:'pc', name:'Számítógép', icon:'💻', system:true},
-  {id:'headset', name:'Fejhallgató', icon:'🎧'},
-  {id:'dock', name:'Dokkoló', icon:'🔌'},
-  {id:'keyboard', name:'Billentyűzet/egér', icon:'⌨️'},
-  {id:'phone', name:'Telefon', icon:'📱'},
-  {id:'printer', name:'Nyomtató', icon:'🖨️'},
+  {id:'pc', name:'Computer', icon:'💻', system:true, nameRule:'custom', nameUnique:true},
+  {id:'headset', name:'Headset', icon:'🎧'},
+  {id:'dock', name:'Dock', icon:'🔌'},
+  {id:'keyboard', name:'Keyboard/mouse', icon:'⌨️'},
+  {id:'phone', name:'Phone', icon:'📱'},
+  {id:'printer', name:'Printer', icon:'🖨️'},
   {id:'switch', name:'Switch', icon:'🔀'},
-  {id:'router', name:'Router / tűzfal', icon:'🛡️'},
-  {id:'server', name:'Szerver', icon:'🗄️'},
-  {id:'ups', name:'Szünetmentes (UPS)', icon:'🔋'},
-  {id:'other', name:'Egyéb', icon:'📦'},
+  {id:'router', name:'Router / firewall', icon:'🛡️'},
+  {id:'server', name:'Server', icon:'🗄️'},
+  {id:'ups', name:'UPS', icon:'🔋'},
+  {id:'other', name:'Other', icon:'📦'},
 ];
-const DOC_KINDS = {
-  out: {label:'Átadás-átvételi', title:'Eszköz átadás-átvételi jegyzőkönyv', prefix:'ÁA'},
-  in:  {label:'Visszavételi',    title:'Eszköz visszavételi jegyzőkönyv',    prefix:'VV'},
-  swap:{label:'Eszközcsere',     title:'Eszközcsere jegyzőkönyv',            prefix:'CS'},
+// default types that were stored with their old Hungarian name; renamed types are left alone
+const OLD_TYPE_NAMES = {'Számítógép':'Computer', 'Fejhallgató':'Headset', 'Dokkoló':'Dock', 'Billentyűzet/egér':'Keyboard/mouse', 'Telefon':'Phone', 'Nyomtató':'Printer',
+  'Router / tűzfal':'Router / firewall', 'Szerver':'Server', 'Szünetmentes (UPS)':'UPS', 'Egyéb':'Other'};
+// dashboard items: the tiles first, then the larger sections
+const DASH_ITEMS = {
+  total:'Total Assets', office:'Office / Onsite Assets', assigned:'Assigned Assets', storage:'Storage / Spare Assets', health:'Faulty / Aged Assets',
+  returns:'Assets Awaiting Return', projects:'Active Projects', unsigned:'Protocols to Sign', nodoc:'Assets Without Protocol',
+  warranty:'Warranty Expiring', models:'Top Models', services:'Services', remote:'WFH / Hybrid People', recent:'Recent Events',
 };
-const SWAP_REASONS = {broken:'Meghibásodás', damaged:'Sérülés', lost:'Elvesztés / lopás', upgrade:'Fejlesztés (újabbra csere)', other:'Egyéb'};
+const DASH_SECTIONS = ['warranty', 'models', 'services', 'remote', 'recent'];
+const DASH_BREAKDOWN = ['total', 'office', 'assigned', 'storage', 'health'];
+function defaultDashboard(){
+  return {items:Object.keys(DASH_ITEMS).map(id => ({id, visible:!['models', 'services', 'remote'].includes(id), size:id === 'total' ? 'wide' : 'normal', breakdown:DASH_BREAKDOWN.includes(id)})),
+    defaults:{officeRoom:'', assignedMode:'', assignedService:'', storageType:'', healthCat:''}};
+}
+// label sheet geometry in mm; the size and the 5 × 16 grid follow from the product data, the margins can be calibrated in the print dialog
+const LABEL_DEFAULT = {top:13.3, left:11, pitchX:38.1, pitchY:16.9};
+const DOC_KINDS = {
+  out: {label:'Handover', title:'Asset Handover Protocol', prefix:'HO'},
+  in:  {label:'Return',   title:'Asset Return Protocol',   prefix:'RT'},
+  swap:{label:'Swap',     title:'Asset Swap Protocol',     prefix:'SW'},
+};
+const SWAP_REASONS = {broken:'Failure', damaged:'Damage', lost:'Lost / stolen', upgrade:'Upgrade', other:'Other'};
 const DEFAULT_SETTINGS = {
   company:'', address:'', handler:'',
-  outText:'Alulírott átvevő aláírásommal igazolom, hogy a fent felsorolt eszközöket hiánytalanul, működőképes állapotban átvettem. ' +
-    'Vállalom, hogy az eszközöket rendeltetésszerűen, munkavégzés céljára használom, megóvásukról gondoskodom, és az esetleges meghibásodást, ' +
-    'elvesztést vagy eltulajdonítást haladéktalanul jelzem az IT részére. Tudomásul veszem, hogy munkaviszonyom megszűnésekor, illetve a munkáltató ' +
-    'kérésére az eszközöket hiánytalanul visszaszolgáltatom, és az általam okozott kárért a munkajogi szabályok szerint felelősséggel tartozom.',
-  inText:'Alulírottak igazolják, hogy a fent felsorolt eszközök visszaszolgáltatása a mai napon megtörtént. Az eszközök visszavételkori ' +
-    'állapotára vonatkozó észrevételek a táblázatban kerültek rögzítésre. A visszaadott eszközökért a munkavállaló felelőssége megszűnik.',
-  swapText:'Alulírottak igazolják, hogy a fenti lecserélt eszköz visszavétele, és helyette a csereeszköz átadása a mai napon megtörtént. ' +
-    'A csereeszközre a munkavállaló az eredeti átadás-átvételi jegyzőkönyvben vállalt felelősséggel azonos módon felel; ' +
-    'a lecserélt eszközért való felelőssége a visszavétellel megszűnik.',
+  outText:'By signing below, I confirm that I have received the assets listed above complete and in working order. ' +
+    'I agree to use them as intended for work, to take care of them, and to report any failure, ' +
+    'loss or theft to IT without delay. I acknowledge that when my employment ends, or at the request of the employer, ' +
+    'I will return the assets complete, and that I am liable for damage I cause under the applicable employment rules.',
+  inText:'The undersigned confirm that the assets listed above were returned today. Remarks on the condition of the assets at ' +
+    'return are recorded in the table. The employee is no longer responsible for the returned assets.',
+  swapText:'The undersigned confirm that the replaced asset above was returned and the replacement asset was handed over today. ' +
+    'The employee is responsible for the replacement asset in the same way as agreed in the original handover protocol; ' +
+    'their responsibility for the replaced asset ends with its return.',
 };
 
 // shared UI state that the storage layer has to know about
@@ -87,7 +114,7 @@ function load(){
 function persist(d){
   if (fp.editing){ fp.dirty = true; return true; }
   try { localStorage.setItem(KEY, JSON.stringify(d)); return true; }
-  catch(e){ alert('Nem sikerült menteni a böngészőbe (valószínűleg megtelt a tárhely – túl sok/nagy kép?): ' + e.message); return false; }
+  catch(e){ alert('Could not save in the browser (storage is probably full – too many or too large images?): ' + e.message); return false; }
 }
 function gcImages(){
   const used = new Set([...db.models.map(m => m.imageId), ...db.assets.map(a => a.imageId)].filter(Boolean));
@@ -97,18 +124,34 @@ function save(){ gcImages(); persist(db); }
 
 // v1 (single html) and v2 data are both brought to the current shape
 function migrate(d){
-  for (const k of ['people', 'rooms', 'desks', 'assets', 'log', 'items', 'docs', 'swaps', 'services', 'roles', 'models', 'fieldSets', 'projects']) d[k] ||= [];
+  for (const k of ['people', 'rooms', 'desks', 'assets', 'log', 'items', 'docs', 'swaps', 'services', 'roles', 'models', 'fieldSets', 'projects', 'returns']) d[k] ||= [];
   d.images ||= {}; d.seq ||= {asset:0};
   d.settings = {...DEFAULT_SETTINGS, ...(d.settings || {})};
+  d.settings.agedYears ||= 5;
+  d.settings.label = {...LABEL_DEFAULT, ...(d.settings.label || {})};
+  const dash = defaultDashboard(), saved = d.settings.dashboard || {};
+  d.settings.dashboard = {items:[...(saved.items || []).filter(i => DASH_ITEMS[i.id]), ...dash.items.filter(i => !(saved.items || []).some(x => x.id === i.id))],
+    defaults:{...dash.defaults, ...(saved.defaults || {})}};
+  if (!d.modes || !d.modes.length) d.modes = DEFAULT_MODES.map(m => ({...m}));
   if (!d.types || !d.types.length) d.types = DEFAULT_TYPES.map(t => ({...t}));
   for (const t of DEFAULT_TYPES) if (t.system && !d.types.some(x => x.id === t.id)) d.types.unshift({...t});
+  for (const t of d.types){
+    if (OLD_TYPE_NAMES[t.name]) t.name = OLD_TYPE_NAMES[t.name];
+    const def = DEFAULT_TYPES.find(x => x.id === t.id) || {};
+    t.nameRule ||= def.nameRule || 'model';
+    if (t.nameUnique === undefined) t.nameUnique = !!def.nameUnique;
+  }
   if ((d.version || 1) < 2) migrateV1(d);
   for (const r of d.rooms){ r.kind ||= 'office'; r.serviceIds ||= []; }
   for (const k of d.desks){ k.kind ||= 'desk'; if (k.shared === undefined) k.shared = false; if (k.port === undefined) k.port = ''; }
-  for (const a of d.assets){ a.custom ||= {}; if (a.placement === undefined) a.placement = null; if (a.serviceId === undefined) a.serviceId = null; }
-  for (const p of d.people) if (!MODES.includes(p.mode)) p.mode = 'Onsite';
+  for (const a of d.assets){ a.custom ||= {}; if (a.placement === undefined) a.placement = null; if (a.serviceId === undefined) a.serviceId = null; if (a.name === undefined) a.name = ''; }
+  for (const p of d.people){ if (!d.modes.some(m => m.id === p.mode)) p.mode = d.modes[0].id; p.status ||= 'Active'; p.tickets ||= []; }
   for (const s of d.fieldSets){ s.typeIds ||= []; s.fields ||= []; }
-  for (const pr of d.projects) for (const x of pr.participants || []){ x.checklist ||= {}; x.prep ||= {}; x.otherIds ||= []; x.manualSerial ||= {}; }
+  for (const pr of d.projects){
+    pr.participants ||= []; pr.demand ||= []; pr.shipments ||= []; pr.replacements ||= [];
+    pr.targetServiceId ||= null; pr.targetRoomId ||= null; pr.accessories ||= '';
+    for (const x of pr.participants){ x.checklist ||= {}; x.prep ||= {}; x.otherIds ||= []; x.manualSerial ||= {}; }
+  }
   for (const l of d.log){ l.id ||= uid(); l.cat ||= 'updated'; }
   d.seq.asset = Math.max(d.seq.asset || 0, ...d.assets.map(a => assetNum(a.tag)), 0);
   d.version = 2;
@@ -142,7 +185,7 @@ function migrateV1(d){
   let n = 0;
   for (const a of d.assets.slice().sort((x, y) => String(x.tag).localeCompare(String(y.tag), 'hu', {numeric:true}))){
     if (!d.types.some(t => t.id === a.type)) a.type = 'other';
-    const name = (a.model || '').trim() || 'Ismeretlen modell', key = a.type + '|' + name.toLowerCase();
+    const name = (a.model || '').trim() || 'Unknown model', key = a.type + '|' + name.toLowerCase();
     if (!models.has(key)){ const m = {id:uid(), typeId:a.type, name, imageId:a.imageId || null}; d.models.push(m); models.set(key, m); }
     const m = models.get(key);
     if (!m.imageId && a.imageId) m.imageId = a.imageId;
@@ -167,59 +210,59 @@ function nextAssetId(){
 
 // ---------- demo data ----------
 function demo(){
-  const d = {version:2, seq:{asset:0}, services:[], roles:[], people:[], rooms:[], desks:[], items:[], types:DEFAULT_TYPES.map(t => ({...t})),
+  const d = {version:2, seq:{asset:0}, services:[], roles:[], people:[], rooms:[], desks:[], items:[], types:DEFAULT_TYPES.map(t => ({...t})), modes:DEFAULT_MODES.map(m => ({...m})), returns:[],
     models:[], fieldSets:[], assets:[], docs:[], swaps:[], projects:[], log:[], images:{},
-    settings:{...DEFAULT_SETTINGS, company:'Példa Kft.', address:'1234 Példaváros, Fő utca 1.', handler:'IT Support'}};
+    settings:{...DEFAULT_SETTINGS, company:'Example Ltd.', address:'1 Main Street, Example City', handler:'IT Support'}};
   const now = Date.now(), day = 864e5, iso = t => new Date(t).toISOString().slice(0, 10);
   const S = name => { const s = {id:uid(), name, note:''}; d.services.push(s); return s; };
   const cs = S('Customer Support'), its = S('IT Support'), fin = S('Finance'), dev = S('Development');
   const Ro = name => { const r = {id:uid(), name}; d.roles.push(r); return r; };
   const agent = Ro('Agent'), tl = Ro('TeamLeader'), devr = Ro('Developer'), itr = Ro('IT Specialist');
-  const P = (name, email, svc, role, mode) => { const p = {id:uid(), name, email, serviceId:svc.id, roleId:role.id, mode, note:''}; d.people.push(p); return p; };
-  const kiss = P('Kiss Péter', 'kiss.peter@ceg.hu', dev, devr, 'Onsite');
-  const nagy = P('Nagy Anna', 'nagy.anna@ceg.hu', dev, devr, 'Hybrid');
-  const toth = P('Tóth Gábor', 'toth.gabor@ceg.hu', fin, agent, 'WFH');
-  const szabo = P('Szabó Eszter', 'szabo.eszter@ceg.hu', cs, tl, 'Onsite');
-  const horvath = P('Horváth Dávid', 'horvath.david@ceg.hu', cs, agent, 'WFH');
-  const varga = P('Varga Júlia', 'varga.julia@ceg.hu', cs, agent, 'Hybrid');
-  const molnar = P('Molnár Tamás', 'molnar.tamas@ceg.hu', its, itr, 'Onsite');
+  const P = (name, email, svc, role, mode) => { const p = {id:uid(), name, email, serviceId:svc.id, roleId:role.id, mode, status:'Active', tickets:[], note:''}; d.people.push(p); return p; };
+  const kiss = P('Kiss Péter', 'kiss.peter@example.com', dev, devr, 'Onsite');
+  const nagy = P('Nagy Anna', 'nagy.anna@example.com', dev, devr, 'Hybrid');
+  const toth = P('Tóth Gábor', 'toth.gabor@example.com', fin, agent, 'WFH');
+  const szabo = P('Szabó Eszter', 'szabo.eszter@example.com', cs, tl, 'Onsite');
+  const horvath = P('Horváth Dávid', 'horvath.david@example.com', cs, agent, 'WFH');
+  const varga = P('Varga Júlia', 'varga.julia@example.com', cs, agent, 'Hybrid');
+  const molnar = P('Molnár Tamás', 'molnar.tamas@example.com', its, itr, 'Onsite');
   const kovacs = P('Kovács Bence', '', cs, agent, 'Onsite');
   const farkas = P('Farkas Lili', '', cs, agent, 'Hybrid');
   const R = (name, floor, kind, w, h, svcs) => { const r = {id:uid(), name, floor, kind, w, h, serviceIds:svcs.map(s => s.id)}; d.rooms.push(r); return r; };
-  const r1 = R('2.12 – Fejlesztői iroda', '2. emelet', 'office', 900, 500, [dev, its]);
-  const r2 = R('1.04 – Ügyfélszolgálat', '1. emelet', 'office', 760, 440, [cs]);
-  const srv = R('0.01 – Szerverszoba', 'Földszint', 'server', 520, 340, [its]);
+  const r1 = R('2.12 – Development Office', '2nd floor', 'office', 900, 500, [dev, its]);
+  const r2 = R('1.04 – Customer Support', '1st floor', 'office', 760, 440, [cs]);
+  const srv = R('0.01 – Server Room', 'Ground floor', 'server', 520, 340, [its]);
   const D = (room, kind, label, x, y, extra = {}) => { const k = {id:uid(), roomId:room.id, kind, label, x, y, w:OBJ[kind].w, h:OBJ[kind].h, personId:null, shared:false, port:'', ...extra}; d.desks.push(k); return k; };
   const I = (room, kind, label, x, y, extra = {}) => { const it = {id:uid(), roomId:room.id, kind, label, x, y, w:OBJ[kind].w, h:OBJ[kind].h, ...extra}; d.items.push(it); return it; };
   const a1 = D(r1, 'desk', 'A1', 40, 60, {personId:kiss.id, port:'R4-5-15'}), a2 = D(r1, 'desk', 'A2', 220, 60, {personId:nagy.id, port:'R4-5-16'});
   const a3 = D(r1, 'desk', 'A3', 400, 60, {port:'R4-5-17'});
   D(r1, 'desk', 'B1', 40, 240, {port:'R4-5-21'}); const b2 = D(r1, 'desk', 'B2', 220, 240, {personId:molnar.id, port:'R4-5-22'});
-  I(r1, 'door', 'Bejárat', 780, 0);
-  const shift = 'Customer Support – 2 műszak';
-  const u = [1, 2, 3, 4, 5].map(i => D(r2, 'desk', 'Ü' + i, 40 + (i - 1) % 3 * 200, i <= 3 ? 60 : 240, {shared:true, sharedNote:shift, port:'R1-4-0' + i}));
-  I(r2, 'door', 'Bejárat', 0, 340, {w:12, h:70});
+  I(r1, 'door', 'Entrance', 780, 0);
+  const shift = 'Customer Support – 2 shifts';
+  const u = [1, 2, 3, 4, 5].map(i => D(r2, 'desk', 'S' + i, 40 + (i - 1) % 3 * 200, i <= 3 ? 60 : 240, {shared:true, sharedNote:shift, port:'R1-4-0' + i}));
+  I(r2, 'door', 'Entrance', 0, 340, {w:12, h:70});
   const rk1 = D(srv, 'rack', 'Rack 1', 60, 80), rk2 = D(srv, 'rack', 'Rack 2', 180, 80);
-  I(srv, 'door', 'Bejárat (beléptetős)', 400, 328);
+  I(srv, 'door', 'Entrance (access control)', 400, 328);
   const models = new Map();
   const M = (typeId, name) => { const k = typeId + '|' + name; if (!models.has(k)){ const m = {id:uid(), typeId, name, imageId:null}; d.models.push(m); models.set(k, m); } return models.get(k).id; };
   let n = 0;
   const A = (type, model, serial, holder, extra = {}) => {
     const arrivedT = now - (60 + Math.floor(Math.random() * 900)) * day;
-    const a = {id:uid(), tag:fmtAssetId(++n), type, modelId:M(type, model), serial, status:'ok', holder, placement:null, serviceId:null, custom:{}, note:'',
-      arrived:iso(arrivedT), warrantyUntil:iso(arrivedT + 3 * 365 * day), supplier:'Demo Kft.', orderNo:'', created:now,
+    const a = {id:uid(), tag:fmtAssetId(++n), name:type === 'pc' ? 'TC-PC-' + String(n).padStart(3, '0') : '', type, modelId:M(type, model), serial, status:'ok', holder, placement:null, serviceId:null, custom:{}, note:'',
+      arrived:iso(arrivedT), warrantyUntil:iso(arrivedT + 3 * 365 * day), supplier:'Demo Ltd.', orderNo:'', created:now,
       assignedAt:holder.kind === 'storage' ? null : arrivedT + 7 * day, ...extra};
     d.assets.push(a);
-    d.log.push({id:uid(), ts:now, cat:'created', assetId:a.id, text:'Létrehozva', by:''});
+    d.log.push({id:uid(), ts:now, cat:'created', assetId:a.id, text:'Created', by:''});
     return a;
   };
   const desk = k => ({kind:'desk', id:k.id}), per = p => ({kind:'person', id:p.id}), office = r => ({kind:'office', id:r.id}), store = {kind:'storage'};
   // custom field sets: groups first, then the fields inside them
   const F = (name, kind, opts = {}) => ({id:uid(), name, kind, required:!!opts.required, options:opts.options || [], active:true});
-  const monFs = {id:uid(), name:'Monitor_Fields', typeIds:['monitor'], fields:[F('Gyártó', 'text'), F('Képátló (col)', 'number'),
-    F('Felbontás', 'select', {options:['1920×1080', '2560×1440', '3840×2160']}), F('HDMI', 'bool'), F('DisplayPort', 'bool')]};
-  const pcFs = {id:uid(), name:'Computer_Fields', typeIds:['pc'], fields:[F('Processzor', 'text'), F('RAM (GB)', 'number'), F('Tárhely (GB)', 'number'),
-    F('Operációs rendszer', 'select', {options:['Windows 11 Pro', 'Windows 10 Pro', 'macOS', 'Linux']}), F('Utolsó újratelepítés', 'date')]};
-  const phFs = {id:uid(), name:'Phone_Fields', typeIds:['phone'], fields:[F('IMEI', 'text', {required:true}), F('Telefonszám', 'text')]};
+  const monFs = {id:uid(), name:'Monitor_Fields', typeIds:['monitor'], fields:[F('Manufacturer', 'text'), F('Screen Size (in)', 'number'),
+    F('Resolution', 'select', {options:['1920×1080', '2560×1440', '3840×2160']}), F('HDMI', 'bool'), F('DisplayPort', 'bool')]};
+  const pcFs = {id:uid(), name:'Computer_Fields', typeIds:['pc'], fields:[F('Processor', 'text'), F('RAM (GB)', 'number'), F('Storage (GB)', 'number'),
+    F('Operating System', 'select', {options:['Windows 11 Pro', 'Windows 10 Pro', 'macOS', 'Linux']}), F('Last Reinstall', 'date')]};
+  const phFs = {id:uid(), name:'Phone_Fields', typeIds:['phone'], fields:[F('IMEI', 'text', {required:true}), F('Phone Number', 'text')]};
   d.fieldSets.push(monFs, pcFs, phFs);
   const [fMan, fDiag, fRes, fHdmi, fDp] = monFs.fields.map(f => f.id), [fCpu, fRam, fSsd, fOs] = pcFs.fields.map(f => f.id);
   const dell = {[fMan]:'Dell', [fDiag]:24, [fRes]:'1920×1080', [fHdmi]:true, [fDp]:true};
@@ -251,17 +294,29 @@ function demo(){
   d.seq.asset = n;
   // a running preparation project for two new Customer Support colleagues
   const pick = iso(now + 7 * day);
-  const pr = {id:uid(), name:'Customer Support – novemberi belépők', owner:'Molnár Tamás', pickupDate:pick, ticket:'INC-20417',
-    note:'2 új agent, az Ü-asztalokhoz.', status:'progress', created:now, completedAt:null, participants:[
+  const pr = {id:uid(), name:'Customer Support – November joiners', owner:'Molnár Tamás', pickupDate:pick, ticket:'INC-20417',
+    note:'2 new agents for the S desks.', status:'progress', created:now, completedAt:null, participants:[
       {id:uid(), personId:kovacs.id, pickupDate:pick, computerId:sPc1.id, monitorId:sMon1.id, monitor2Id:null, otherIds:[],
         prep:{computer:'Waiting for Erase', monitor:'Ready'}, manualSerial:{}, checklist:{keyboard:true, mouse:true, power:true}},
       {id:uid(), personId:farkas.id, pickupDate:pick, computerId:sPc2.id, monitorId:sMon2.id, monitor2Id:null, otherIds:[],
         prep:{computer:'Imaging'}, manualSerial:{}, checklist:{}},
     ]};
   d.projects.push(pr);
-  d.log.push({id:uid(), ts:now, cat:'project', projectId:pr.id, text:'Projekt létrehozva: ' + pr.name, by:''});
+  d.log.push({id:uid(), ts:now, cat:'project', projectId:pr.id, text:'Project created: ' + pr.name, by:''});
+  // a project without named people yet: only the demand is known
+  const pr2 = {id:uid(), name:'Five new joiners – preparation', owner:'Molnár Tamás', pickupDate:iso(now + 30 * day), ticket:'REQ-20533', note:'Names are not known yet.', status:'planning',
+    created:now, completedAt:null, participants:[], demand:[{id:uid(), typeId:'pc', qty:5, assetIds:[]}, {id:uid(), typeId:'monitor', qty:5, assetIds:[]}, {id:uid(), typeId:'headset', qty:5, assetIds:[]}],
+    shipments:[], replacements:[], targetServiceId:cs.id, targetRoomId:r2.id, accessories:'Dock, keyboard and mouse for each desk'};
+  d.projects.push(pr2);
+  d.log.push({id:uid(), ts:now, cat:'project', projectId:pr2.id, text:'Project created: ' + pr2.name, by:''});
+  // examples for the Faulty / Aged view: one of each kind and one that is both
+  const old = t => iso(t - 6 * 365 * day);
+  const byS = s => d.assets.find(a => a.serial === s);
+  byS('HP800-330').status = 'faulty';
+  byS('CN0D1X6C').arrived = old(now);
+  Object.assign(byS('DK-99014'), {arrived:old(now), status:'faulty'});
   d.log.reverse();
-  return d;
+  return migrate(d);
 }
 
 // ---------- lookups ----------
@@ -276,10 +331,30 @@ const role = id => byId(db.roles, id);
 const model = id => byId(db.models, id);
 const project = id => byId(db.projects, id);
 const findObj = id => desk(id) || item(id);
-const typeOf = id => byId(db.types, id) || {id, name:'Ismeretlen típus', icon:'📦'};
+const typeOf = id => byId(db.types, id) || {id, name:'Unknown type', icon:'📦'};
 const typeIcon = id => typeOf(id).icon || '📦';
 const typeLabel = id => typeOf(id).name;
 const modelName = a => (model(a.modelId) || {}).name || '';
+// an empty stored name means "use the model name", so existing assets are not rewritten and follow later model renames
+const assetName = a => a.name || modelName(a);
+const modeOf = id => byId(db.modes, id) || {id, name:id || '', icon:'', behavior:'onsite'};
+const modeName = id => modeOf(id).name;
+const modeIcon = id => modeOf(id).icon;
+const modeBehavior = id => modeOf(id).behavior;
+const assetPerson = a => a.holder.kind === 'person' ? person(a.holder.id) : null;
+const assetServiceIs = (a, id) => a.serviceId === id || (assetPerson(a) || {}).serviceId === id;
+const isOut = a => a.status === 'lost' || a.status === 'retired';
+const isFaulty = a => a.status === 'faulty' || a.status === 'repair';
+const ageYears = a => a.arrived ? (Date.now() - new Date(a.arrived).getTime()) / (365.25 * 864e5) : null;
+const isAged = a => { const y = ageYears(a); return y !== null && y >= db.settings.agedYears; };
+// the dashboard groups; each comes from the asset's real state, never from a separate list
+const ASSET_VIEWS = {
+  office:  {title:'Office / Onsite Assets', test:a => a.holder.kind === 'office' || a.holder.kind === 'desk'},
+  assigned:{title:'Assigned Assets',        test:a => a.holder.kind === 'person'},
+  storage: {title:'Storage / Spare Assets', test:a => a.holder.kind === 'storage' && !isOut(a)},
+  health:  {title:'Faulty / Aged Assets',   test:a => !isOut(a) && (isFaulty(a) || isAged(a))},
+  awaiting:{title:'Assets Awaiting Return', test:a => !!openReturnOf(a.id)},
+};
 const serviceName = id => (service(id) || {}).name || '';
 const roleName = id => (role(id) || {}).name || '';
 const roomObjs = rid => [...db.desks.filter(k => k.roomId === rid), ...db.items.filter(i => i.roomId === rid)];
@@ -294,15 +369,15 @@ const furnIcon = k => k.kind === 'rack' ? '🗄️' : '🪑';
 function deskOwnerText(k){
   if (k.kind === 'rack') return '';
   const p = k.personId ? person(k.personId) : null;
-  if (p) return p.name + ' asztala';
-  return k.shared ? k.sharedNote || 'közös / műszakos' : '';
+  if (p) return p.name + "'s desk";
+  return k.shared ? k.sharedNote || 'shared / shift' : '';
 }
 function holderText(h){
-  if (!h || h.kind === 'storage') return '📦 Raktárban';
-  if (h.kind === 'person'){ const p = person(h.id); return p ? `👤 ${p.name} (${p.mode})` : '❓ Ismeretlen személy'; }
-  if (h.kind === 'office'){ const r = room(h.id); return r ? `🏢 ${r.name} – irodai eszközhalmaz` : '❓ Ismeretlen iroda'; }
+  if (!h || h.kind === 'storage') return '📦 In Stock';
+  if (h.kind === 'person'){ const p = person(h.id); return p ? `👤 ${p.name} (${p.mode})` : '❓ Unknown person'; }
+  if (h.kind === 'office'){ const r = room(h.id); return r ? `🏢 ${r.name} – office pool` : '❓ Unknown office'; }
   if (h.kind === 'desk'){
-    const k = desk(h.id); if (!k) return '❓ Ismeretlen hely';
+    const k = desk(h.id); if (!k) return '❓ Unknown location';
     const r = room(k.roomId), o = deskOwnerText(k);
     return `${furnIcon(k)} ${r ? r.name : '?'} › ${k.label}` + (o ? ` – ${o}` : '');
   }
@@ -310,11 +385,11 @@ function holderText(h){
 }
 function placementText(a){
   const k = a.placement && desk(a.placement.deskId);
-  return k ? `🪑 asztalon: ${(room(k.roomId) || {}).name || '?'} › ${k.label}` : '';
+  return k ? `🪑 on desk: ${(room(k.roomId) || {}).name || '?'} › ${k.label}` : '';
 }
 const whereText = a => holderText(a.holder) + (placementText(a) ? ' · ' + placementText(a) : '');
 function holderHref(h){
-  if (!h || h.kind === 'storage') return '#/assets?loc=storage';
+  if (!h || h.kind === 'storage') return '#/assets?view=storage';
   if (h.kind === 'person') return '#/person/' + h.id;
   if (h.kind === 'office') return '#/room/' + h.id;
   if (h.kind === 'desk'){ const k = desk(h.id); return k ? `#/room/${k.roomId}/${k.id}` : '#/rooms'; }
@@ -338,13 +413,60 @@ function setHolder(a, h, extra = {}){
   if (before === after) return;
   a.assignedAt = h.kind === 'storage' || h.kind === 'office' ? null : Date.now();
   const cat = nowPerson ? 'checkout' : wasPerson ? 'returned' : 'moved';
-  log(a.id, `${{checkout:'Kiadva', returned:'Visszavéve', moved:'Áthelyezve'}[cat]}: ${before} → ${after}`, cat, extra);
+  log(a.id, `${{checkout:'Checked out', returned:'Returned', moved:'Moved'}[cat]}: ${before} → ${after}`, cat, {...extra, personId:nowPerson || wasPerson});
+  if (wasPerson && wasPerson !== nowPerson) closeReturns(a.id, wasPerson);
+  const np = nowPerson && person(nowPerson);
+  if (np && np.status !== 'Active') openReturn(a.id, np.id, 'status');
+}
+
+// ---------- expected returns: one record type for user status and project replacements ----------
+const openReturnOf = assetId => db.returns.find(r => r.assetId === assetId && r.state === 'awaiting');
+const personReturns = pid => db.returns.filter(r => r.personId === pid && r.state !== 'cancelled');
+const openReturns = pid => personReturns(pid).filter(r => r.state === 'awaiting');
+const currentReturn = assetId => db.returns.find(r => r.assetId === assetId && (r.state === 'awaiting' || r.state === 'notRequired'));
+function openReturn(assetId, personId, source, extra = {}){
+  let r = db.returns.find(x => x.assetId === assetId && x.personId === personId && (x.state === 'awaiting' || x.state === 'notRequired'));
+  if (r){
+    if (!r.sources.includes(source)) r.sources.push(source);
+    if (extra.projectId) r.projectId = extra.projectId;
+    if (extra.ticket) r.ticket = extra.ticket;
+    if (extra.keepState !== true) r.state = 'awaiting';
+    return r;
+  }
+  r = {id:uid(), assetId, personId, state:'awaiting', sources:[source], projectId:extra.projectId || null, ticket:extra.ticket || '', openedAt:Date.now(), closedAt:null};
+  db.returns.push(r);
+  log(assetId, `Return expected from ${(person(personId) || {}).name || '?'} (${source === 'status' ? 'user status' : 'replacement'})`, 'updated', {personId, projectId:r.projectId});
+  return r;
+}
+// the actual return: only setHolder gets here, so "Returned" always means the asset really came back
+function closeReturns(assetId, personId){
+  for (const r of db.returns) if (r.assetId === assetId && r.personId === personId && (r.state === 'awaiting' || r.state === 'notRequired')){
+    r.state = 'returned'; r.closedAt = Date.now();
+    log(assetId, `Return completed from ${(person(personId) || {}).name || '?'}`, 'returned', {personId, projectId:r.projectId});
+  }
+}
+function setReturnState(r, state){
+  if (r.state === state || (state !== 'awaiting' && state !== 'notRequired')) return;
+  r.state = state;
+  log(r.assetId, `Return state: ${RETURN_STATE[state]}`, 'updated', {personId:r.personId, projectId:r.projectId});
+}
+// changing the status never moves an asset: it only opens or cancels the expectation
+function setUserStatus(p, status, ticket, note){
+  const old = p.status;
+  if (old === status) return;
+  p.status = status;
+  log(null, `User status of ${p.name}: ${old} → ${status}${ticket ? ` (ticket ${ticket})` : ''}${note ? ` – ${note}` : ''}`, 'status', {personId:p.id});
+  if (status !== 'Active') for (const a of personAssets(p.id).direct) openReturn(a.id, p.id, 'status', {ticket});
+  else for (const r of db.returns.filter(x => x.personId === p.id && x.state !== 'returned' && x.state !== 'cancelled' && x.sources.includes('status'))){
+    r.sources = r.sources.filter(s => s !== 'status');
+    if (!r.sources.length){ r.state = 'cancelled'; r.closedAt = Date.now(); log(r.assetId, 'Return expectation cancelled: user is Active again', 'updated', {personId:p.id}); }
+  }
 }
 function setPlacement(a, deskId){
   const k = deskId && desk(deskId), old = placementText(a);
   a.placement = k ? {deskId:k.id} : null;
   const p = person(a.holder.id);
-  log(a.id, k ? `Asztalra helyezve: ${(room(k.roomId) || {}).name} › ${k.label} (${p ? p.name : '?'}-nál marad)` : `Levéve az asztalról (${old}) – ${p ? p.name : '?'}-nál marad`, 'moved');
+  log(a.id, k ? `Placed on desk: ${(room(k.roomId) || {}).name} › ${k.label} (stays with ${p ? p.name : '?'})` : `Removed from desk (${old}) – stays with ${p ? p.name : '?'}`, 'moved');
 }
 
 function personAssets(pid){
@@ -364,25 +486,26 @@ function modePool(rid, mode){
   return db.assets.filter(a => {
     if (a.holder.kind !== 'person') return false;
     const p = person(a.holder.id);
-    return p && p.mode === mode && (r.serviceIds.includes(p.serviceId) || r.serviceIds.includes(a.serviceId));
+    return p && modeBehavior(p.mode) === mode && (r.serviceIds.includes(p.serviceId) || r.serviceIds.includes(a.serviceId));
   });
 }
 
 // ---------- log ----------
 function log(assetId, text, cat = 'updated', extra = {}){
-  db.log.unshift({id:uid(), ts:Date.now(), cat, assetId:assetId || null, projectId:extra.projectId || null, text, by:currentUser()});
+  db.log.unshift({id:uid(), ts:Date.now(), cat, assetId:assetId || null, projectId:extra.projectId || null, personId:extra.personId || null, text, by:currentUser()});
   if (db.log.length > 8000) db.log.length = 8000;
 }
 const plog = (projectId, text) => log(null, text, 'project', {projectId});
+const clog = text => log(null, text, 'config');
 
 // ---------- warranty ----------
-const fmtDate = s => s ? s.replace(/-/g, '.') + '.' : '–';
+const fmtDate = s => s || '–';
 function warranty(a){
   if (!a.warrantyUntil) return {cls:'', text:'–', days:null};
   const days = Math.ceil((new Date(a.warrantyUntil + 'T23:59:59') - Date.now()) / 864e5);
-  if (days < 0) return {cls:'bad', text:'Lejárt (' + fmtDate(a.warrantyUntil) + ')', days};
-  if (days <= 60) return {cls:'warn', text:`${days} nap múlva lejár`, days};
-  return {cls:'ok', text:fmtDate(a.warrantyUntil) + '-ig', days};
+  if (days < 0) return {cls:'bad', text:'Expired (' + fmtDate(a.warrantyUntil) + ')', days};
+  if (days <= 60) return {cls:'warn', text:`expires in ${days} days`, days};
+  return {cls:'ok', text:'until ' + fmtDate(a.warrantyUntil), days};
 }
 
 // ---------- custom fields ----------
@@ -394,7 +517,7 @@ function fieldsForType(typeId){
 }
 function fieldValueText(f, v){
   if (v === undefined || v === null || v === '') return '–';
-  if (f.kind === 'bool') return v ? 'Igen' : 'Nem';
+  if (f.kind === 'bool') return v ? 'Yes' : 'No';
   if (f.kind === 'date') return fmtDate(v);
   return String(v);
 }

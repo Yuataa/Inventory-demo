@@ -1,23 +1,24 @@
 'use strict';
-/* Közös felületi elemek: segédfüggvények, párbeszédablak, kereshető lista, eszköztáblázat, tömeges kijelölés, napló, globális keresés */
+/* Shared UI: helpers, dialog, searchable list, asset table, bulk selection, log, global search */
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 const sortHu = (arr, f) => arr.slice().sort((a, b) => String(f(a)).localeCompare(String(f(b)), 'hu', {numeric:true}));
-const fmtTime = ts => new Date(ts).toLocaleString('hu-HU', {year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
+const fmtTime = ts => new Date(ts).toLocaleString('en-GB', {year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const statusPill = s => { const x = STATUS[s] || STATUS.ok; return `<span class="pill ${x.cls}">${x.label}</span>`; };
 const warrantyPill = a => { const w = warranty(a); return w.days === null ? '<span class="muted">–</span>' : `<span class="pill ${w.cls}">${w.text}</span>`; };
-const modePill = m => m ? `<span class="pill ${m}">${MODE_ICON[m] || ''} ${m}</span>` : '<span class="muted">–</span>';
+const modePill = m => m ? `<span class="pill ${{onsite:'Onsite', hybrid:'Hybrid', wfh:'WFH'}[modeBehavior(m)]}">${modeIcon(m)} ${esc(modeName(m))}</span>` : '<span class="muted">–</span>';
+const userPill = s => `<span class="pill ${(USER_STATUS[s] || {}).cls || ''}">${esc(s)}</span>`;
 const assetImg = a => { const m = model(a.modelId); return (m && m.imageId && db.images[m.imageId]) || (a.imageId && db.images[a.imageId]) || null; };
 const assetIcon = a => { const img = assetImg(a); return img ? `<img class="thumb" src="${img}" alt="" title="${esc(typeLabel(a.type))}">` : `<span class="ico" title="${esc(typeLabel(a.type))}">${typeIcon(a.type)}</span>`; };
 const holderLink = h => `<a href="${holderHref(h)}">${esc(holderText(h))}</a>`;
 const whereLink = a => holderLink(a.holder) + (a.placement ? `<br><small class="muted">${esc(placementText(a))}</small>` : '');
 const aidLink = a => `<a class="tag aid" href="#/asset/${a.id}">${esc(a.tag)}</a>`;
-const copyBtn = t => `<button type="button" class="copy sm" data-copy="${esc(t)}" title="Másolás vágólapra">⧉</button>`;
-const typeLink = a => `<a href="#/assets?type=${encodeURIComponent(a.type)}" title="Minden ${esc(typeLabel(a.type))}">${esc(typeLabel(a.type))}</a>`;
-const modelLink = a => a.modelId ? `<a href="#/assets?model=${encodeURIComponent(a.modelId)}" title="Minden ilyen modell">${esc(modelName(a))}</a>` : '<span class="muted">–</span>';
+const copyBtn = t => `<button type="button" class="copy sm" data-copy="${esc(t)}" title="Copy to clipboard">⧉</button>`;
+const typeLink = a => `<a href="#/assets?type=${encodeURIComponent(a.type)}" title="All ${esc(typeLabel(a.type))}">${esc(typeLabel(a.type))}</a>`;
+const modelLink = a => a.modelId ? `<a href="#/assets?model=${encodeURIComponent(a.modelId)}" title="All of this model">${esc(modelName(a))}</a>` : '<span class="muted">–</span>';
 const personLink = id => { const p = person(id); return p ? `<a href="#/person/${p.id}">${esc(p.name)}</a>` : '<span class="muted">–</span>'; };
 
 function toast(msg){
@@ -29,7 +30,7 @@ function toast(msg){
 async function copyText(t){
   try { await navigator.clipboard.writeText(t); }
   catch(e){ const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
-  toast('Vágólapra másolva: ' + t);
+  toast('Copied: ' + t);
 }
 document.addEventListener('click', e => { const b = e.target.closest('[data-copy]'); if (b){ e.preventDefault(); e.stopPropagation(); copyText(b.dataset.copy); } });
 
@@ -47,36 +48,55 @@ function openDialog(html, onSubmit){
   dlg.showModal();
   const first = form.querySelector('input:not([type=search]),select,textarea'); if (first) first.focus();
 }
-const dlgActions = (ok = 'Mentés') => `<div class="actions"><button value="cancel" formnovalidate>Mégse</button><button class="primary" value="ok" id="dlgOk">${ok}</button></div>`;
+const dlgActions = (ok = 'Save') => `<div class="actions"><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok" id="dlgOk">${ok}</button></div>`;
 const selOpts = (list, cur, label = x => x.name, empty) => (empty !== undefined ? `<option value="">${esc(empty)}</option>` : '') +
   list.map(x => `<option value="${esc(x.id)}"${x.id === cur ? ' selected' : ''}>${esc(label(x))}</option>`).join('');
 
-// ---------- searchable picker: a filter box above a list ----------
-const picker = (name, optionsHtml, o = {}) => `<div class="picker"><input type="search" class="pick-q" placeholder="Keresés a listában…">
-  <select name="${name}"${o.id ? ` id="${o.id}"` : ''} size="${o.size || 7}"${o.required ? ' required' : ''}>${optionsHtml}</select></div>`;
-document.addEventListener('input', e => {
-  if (!e.target.classList.contains('pick-q')) return;
-  const sel = e.target.parentElement.querySelector('select'), q = norm(e.target.value);
-  for (const o of sel.options) o.hidden = !!q && !norm(o.textContent + ' ' + (o.parentElement.label || '')).includes(q);
+// a second modal on top of the form dialog; resolves to true only on Confirm
+function askConfirm(title, html, ok = 'Confirm'){
+  return new Promise(res => {
+    let d = $('#cfm');
+    if (!d){ d = document.createElement('dialog'); d.id = 'cfm'; document.body.appendChild(d); }
+    d.innerHTML = `<form onsubmit="return false"><h3>${esc(title)}</h3>${html}<div class="actions"><button type="button" id="cfmNo">Cancel</button><button type="button" class="primary" id="cfmOk">${esc(ok)}</button></div></form>`;
+    const done = v => { d.close(); res(v); };
+    $('#cfmOk').onclick = () => done(true);
+    $('#cfmNo').onclick = () => done(false);
+    d.oncancel = e => { e.preventDefault(); done(false); };
+    d.showModal();
+  });
+}
+
+// ---------- searchable picker: a filter box above a list, with optional Service / Work Mode / Office filters ----------
+const holderFilters = () => `<select class="pick-f" data-k="svc" title="Service"><option value="">All Services</option>${sortHu(db.services, s => s.name).map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
+  <select class="pick-f" data-k="mode" title="Work Mode"><option value="">All Work Modes</option>${db.modes.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select>
+  <select class="pick-f" data-k="room" title="Office"><option value="">All Offices</option>${sortHu(db.rooms, r => r.name).map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>`;
+const picker = (name, optionsHtml, o = {}) => `<div class="picker">${o.filters ? `<div class="pick-row">${holderFilters()}</div>` : ''}<input type="search" class="pick-q" placeholder="Search the list…">
+  <select class="pick-list" name="${name}"${o.id ? ` id="${o.id}"` : ''} size="${o.size || 7}"${o.required ? ' required' : ''}>${optionsHtml}</select></div>`;
+function applyPicker(wrap){
+  const sel = wrap.querySelector('.pick-list'), q = norm(wrap.querySelector('.pick-q').value);
+  const fs = [...wrap.querySelectorAll('.pick-f')].filter(f => f.value);
+  for (const o of sel.options) o.hidden = (!!q && !norm(o.textContent + ' ' + (o.parentElement.label || '')).includes(q)) || (o.value !== '' && fs.some(f => o.dataset[f.dataset.k] !== f.value));
   for (const g of sel.querySelectorAll('optgroup')) g.hidden = ![...g.children].some(o => !o.hidden);
   const first = [...sel.options].find(o => !o.hidden);
   if (first && (!sel.selectedOptions[0] || sel.selectedOptions[0].hidden)) sel.value = first.value;
-});
+}
+document.addEventListener('input', e => { if (e.target.classList.contains('pick-q')) applyPicker(e.target.closest('.picker')); });
+document.addEventListener('change', e => { if (e.target.classList.contains('pick-f')) applyPicker(e.target.closest('.picker')); });
 // every place an asset can go: storage, people, office pools, desks
 function holderOptions(current, o = {}){
   const sel = v => v === current ? ' selected' : '';
-  let h = o.noStorage ? '' : `<option value="storage"${sel('storage')}>📦 Raktár</option>`;
-  h += '<optgroup label="Személyhez kiadás">' + sortHu(db.people, p => p.name).map(p =>
-    `<option value="person:${p.id}"${sel('person:' + p.id)}>👤 ${esc(p.name)} – ${esc(serviceName(p.serviceId) || 'nincs Service')} · ${p.mode}</option>`).join('') + '</optgroup>';
+  let h = o.noStorage ? '' : `<option value="storage"${sel('storage')}>📦 In Stock</option>`;
+  h += '<optgroup label="Assign to a person">' + sortHu(db.people, p => p.name).map(p =>
+    `<option value="person:${p.id}" data-svc="${p.serviceId || ''}" data-mode="${esc(p.mode)}"${sel('person:' + p.id)}>👤 ${esc(p.name)} – ${esc(serviceName(p.serviceId) || 'no Service')} · ${esc(modeName(p.mode))}${p.status !== 'Active' ? ' · ' + p.status : ''}</option>`).join('') + '</optgroup>';
   const offices = sortHu(db.rooms, r => r.name);
-  if (offices.length) h += '<optgroup label="Irodai eszközhalmaz (asztalon kívül)">' + offices.map(r =>
-    `<option value="office:${r.id}"${sel('office:' + r.id)}>🏢 ${esc(r.name)}</option>`).join('') + '</optgroup>';
+  if (offices.length) h += '<optgroup label="Office pool (not on a desk)">' + offices.map(r =>
+    `<option value="office:${r.id}" data-room="${r.id}"${sel('office:' + r.id)}>🏢 ${esc(r.name)}</option>`).join('') + '</optgroup>';
   for (const r of offices){
     const ks = sortHu(db.desks.filter(k => k.roomId === r.id), k => k.label);
     if (!ks.length) continue;
-    h += `<optgroup label="${esc(r.name)} – asztalok">` + ks.map(k => {
+    h += `<optgroup label="${esc(r.name)} – desks">` + ks.map(k => {
       const ow = deskOwnerText(k);
-      return `<option value="desk:${k.id}"${sel('desk:' + k.id)}>${furnIcon(k)} ${esc(k.label)}${ow ? ' – ' + esc(ow) : ''}</option>`;
+      return `<option value="desk:${k.id}" data-room="${r.id}"${sel('desk:' + k.id)}>${furnIcon(k)} ${esc(k.label)}${ow ? ' – ' + esc(ow) : ''}</option>`;
     }).join('') + '</optgroup>';
   }
   return h;
@@ -94,7 +114,7 @@ function resizeImage(file, max = 240){
       ctx.drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg', 0.82));
     };
-    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('A fájl nem olvasható képként.')); };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('The file cannot be read as an image.')); };
     img.src = url;
   });
 }
@@ -117,7 +137,7 @@ function updateBulk(){
   if (bar){
     bar.hidden = !selected.size;
     const hidden = [...selected].filter(id => !boxes.some(b => b.dataset.id === id)).length;
-    bar.querySelectorAll('.bulkCount').forEach(s => s.textContent = selected.size + (hidden ? ` (${hidden} nem látszik a szűrés miatt)` : ''));
+    bar.querySelectorAll('.bulkCount').forEach(s => s.textContent = selected.size + (hidden ? ` (${hidden} hidden by the filter)` : ''));
   }
 }
 document.addEventListener('change', e => {
@@ -131,18 +151,19 @@ document.addEventListener('change', e => {
 
 // ---------- asset table ----------
 function assetRows(list, opts = {}){
-  if (!list.length) return `<div class="empty">Nincs eszköz.</div>`;
-  return `<div class="tbl-wrap"><table><thead><tr>${opts.select ? '<th class="sel"><input type="checkbox" id="selAll" title="Összes kijelölése"></th>' : ''}<th></th><th>Asset ID</th><th>Típus</th><th>Modell</th><th>Sorozatszám</th><th>Állapot</th><th>Garancia</th>${opts.noLoc ? '' : '<th>Hol van</th>'}${opts.actions ? '<th></th>' : ''}</tr></thead><tbody>` +
+  if (!list.length) return `<div class="empty">No assets.</div>`;
+  return `<div class="tbl-wrap"><table><thead><tr>${opts.select ? '<th class="sel"><input type="checkbox" id="selAll" title="Select all"></th>' : ''}<th></th><th>Asset ID</th><th>Asset Name</th><th>Type</th><th>Model</th><th>Serial Number</th><th>Status</th><th>Warranty</th>${opts.noLoc ? '' : '<th>Location</th>'}${opts.actions ? '<th></th>' : ''}</tr></thead><tbody>` +
     list.map(a => {
-      const res = reservedBy(a.id);
+      const res = reservedBy(a.id), ret = openReturnOf(a.id);
       return `<tr${selected.has(a.id) ? ' class="picked"' : ''}>
       ${opts.select ? `<td class="sel"><input type="checkbox" class="selbox" data-id="${a.id}"${selected.has(a.id) ? ' checked' : ''}></td>` : ''}
       <td style="width:40px">${assetIcon(a)}</td>
-      <td>${aidLink(a)}${copyBtn(a.tag)}${res ? `<br><a class="pill acc" href="#/project/${res.project.id}" title="Projekthez foglalva">📋 ${esc(res.project.name)}</a>` : ''}</td>
+      <td>${aidLink(a)}${copyBtn(a.tag)}${res ? `<br><a class="pill acc" href="#/project/${res.project.id}" title="Reserved for a project">📋 ${esc(res.project.name)}</a>` : ''}${ret ? '<br><span class="pill warn">↩ Awaiting Return</span>' : ''}</td>
+      <td>${esc(assetName(a))}</td>
       <td>${typeLink(a)}</td>
       <td>${modelLink(a)}</td>
       <td class="muted">${esc(a.serial)}</td>
-      <td>${statusPill(a.status)}</td>
+      <td>${statusPill(a.status)}${isAged(a) ? ' <span class="pill warn">Aged</span>' : ''}</td>
       <td>${warrantyPill(a)}</td>
       ${opts.noLoc ? '' : `<td>${whereLink(a)}</td>`}
       ${opts.actions ? `<td style="text-align:right;white-space:nowrap">${opts.actions(a)}</td>` : ''}
@@ -153,12 +174,12 @@ function assetRows(list, opts = {}){
 // ---------- logs ----------
 const CAT_PILL = {created:'ok', updated:'', moved:'acc', checkout:'warn', returned:'ok', project:'acc'};
 function logSubject(l){
-  const a = l.assetId && asset(l.assetId), pr = l.projectId && project(l.projectId);
-  return [a ? aidLink(a) : l.assetId ? '<span class="muted">törölt eszköz</span>' : '', pr ? `<a href="#/project/${pr.id}">📋 ${esc(pr.name)}</a>` : ''].filter(Boolean).join('<br>') || '<span class="muted">–</span>';
+  const a = l.assetId && asset(l.assetId), pr = l.projectId && project(l.projectId), p = l.personId && person(l.personId);
+  return [a ? aidLink(a) : l.assetId ? '<span class="muted">deleted asset</span>' : '', pr ? `<a href="#/project/${pr.id}">📋 ${esc(pr.name)}</a>` : '', p ? personLink(p.id) : ''].filter(Boolean).join('<br>') || '<span class="muted">–</span>';
 }
 function logTable(entries, o = {}){
-  if (!entries.length) return `<div class="empty">Nincs bejegyzés.</div>`;
-  return `<div class="tbl-wrap"><table><thead><tr><th>Időpont</th><th>Típus</th>${o.noSubject ? '' : '<th>Tárgy</th>'}<th>Esemény</th><th>Ki</th></tr></thead><tbody>${entries.map(l =>
+  if (!entries.length) return `<div class="empty">No entries.</div>`;
+  return `<div class="tbl-wrap"><table><thead><tr><th>Time</th><th>Type</th>${o.noSubject ? '' : '<th>Subject</th>'}<th>Event</th><th>By</th></tr></thead><tbody>${entries.map(l =>
     `<tr><td class="muted" style="white-space:nowrap">${fmtTime(l.ts)}</td><td><span class="pill ${CAT_PILL[l.cat] || ''}">${LOG_CATS[l.cat] || l.cat}</span></td>
      ${o.noSubject ? '' : `<td>${logSubject(l)}</td>`}<td>${esc(l.text)}</td><td class="muted">${esc(l.by || '–')}</td></tr>`).join('')}</tbody></table></div>`;
 }
@@ -167,13 +188,13 @@ const logMatches = (l, cat) => !cat ? true : cat === 'project' ? l.cat === 'proj
 function viewLogs(params){
   const cat = params.get('cat') || '', q = params.get('q') || '';
   let list = db.log.filter(l => logMatches(l, cat));
-  if (q){ const n = norm(q); list = list.filter(l => norm([l.text, l.by, (asset(l.assetId) || {}).tag, (project(l.projectId) || {}).name].join(' ')).includes(n)); }
+  if (q){ const n = norm(q); list = list.filter(l => norm([l.text, l.by, (asset(l.assetId) || {}).tag, (project(l.projectId) || {}).name, (person(l.personId) || {}).name].join(' ')).includes(n)); }
   const chip = (c, label) => { const n = db.log.filter(l => logMatches(l, c)).length;
     return `<a href="#/log${c ? '?cat=' + c : ''}" class="${c === cat ? 'on' : ''}">${label} <small>${n}</small></a>`; };
-  return `<h1>Logs</h1><div class="sub">Eszközmozgások, kiadások, visszavételek, módosítások és projektesemények.</div>
+  return `<h1>Logs</h1><div class="sub">Moves, checkouts, returns, changes, status updates and project events.</div>
     <div class="fchips">${chip('', 'All')}${Object.entries(LOG_CATS).map(([k, v]) => chip(k, v)).join('')}</div>
-    <div class="row" style="margin-bottom:12px"><input id="lq" placeholder="Szűrés szövegre, Asset ID-ra, projektre…" value="${esc(q)}" style="min-width:300px">
-      <span class="muted">${list.length} bejegyzés${list.length > 500 ? ' (az első 500 látszik)' : ''}</span></div>
+    <div class="row" style="margin-bottom:12px"><input id="lq" placeholder="Filter by text, Asset ID, project…" value="${esc(q)}" style="min-width:300px">
+      <span class="muted">${list.length} entries${list.length > 500 ? ' (first 500 shown)' : ''}</span></div>
     ${logTable(list.slice(0, 500))}`;
 }
 function bindLogs(params){
@@ -188,21 +209,21 @@ function bindLogs(params){
 function search(q){
   const n = norm(q.trim()); if (!n) return [];
   const out = [];
-  for (const p of db.people) if (norm([p.name, p.email, serviceName(p.serviceId), roleName(p.roleId), p.mode].join(' ')).includes(n)){
+  for (const p of db.people) if (norm([p.name, p.email, serviceName(p.serviceId), roleName(p.roleId), modeName(p.mode), p.status, ...p.tickets.map(t => t.no)].join(' ')).includes(n)){
     const pa = personAssets(p.id);
-    out.push({grp:'Emberek', href:'#/person/' + p.id, title:'👤 ' + p.name, sub:`${serviceName(p.serviceId) || 'nincs Service'} · ${p.mode} · ${pa.direct.length + pa.onDesk.length} eszköz`});
+    out.push({grp:'People', href:'#/person/' + p.id, title:'👤 ' + p.name, sub:`${serviceName(p.serviceId) || 'no Service'} · ${modeName(p.mode)} · ${p.status} · ${pa.direct.length + pa.onDesk.length} assets`});
   }
   for (const a of db.assets){
     const custom = Object.values(a.custom || {}).join(' ');
-    if (norm([a.tag, a.legacyTag, a.serial, modelName(a), typeLabel(a.type), a.note, custom].join(' ')).includes(n))
-      out.push({grp:'Eszközök', href:'#/asset/' + a.id, title:`${typeIcon(a.type)} ${a.tag} · ${modelName(a)}`, sub:whereText(a) + (a.serial ? ' · S/N ' + a.serial : '')});
+    if (norm([a.tag, a.legacyTag, a.name, a.serial, modelName(a), typeLabel(a.type), a.note, custom].join(' ')).includes(n))
+      out.push({grp:'Assets', href:'#/asset/' + a.id, title:`${typeIcon(a.type)} ${a.tag} · ${assetName(a)}`, sub:whereText(a) + (a.serial ? ' · S/N ' + a.serial : '')});
   }
   for (const k of db.desks){ const r = room(k.roomId); if (norm([k.label, k.port, r ? r.name : '', k.sharedNote].join(' ')).includes(n))
-    out.push({grp:'Asztalok', href:`#/room/${k.roomId}/${k.id}`, title:`${furnIcon(k)} ${k.label}${k.port ? ' · port ' + k.port : ''}`, sub:(r ? r.name : '') + (deskOwnerText(k) ? ' – ' + deskOwnerText(k) : '')}); }
+    out.push({grp:'Desks', href:`#/room/${k.roomId}/${k.id}`, title:`${furnIcon(k)} ${k.label}${k.port ? ' · port ' + k.port : ''}`, sub:(r ? r.name : '') + (deskOwnerText(k) ? ' – ' + deskOwnerText(k) : '')}); }
   for (const pr of db.projects) if (norm([pr.name, pr.ticket, pr.owner].join(' ')).includes(n))
-    out.push({grp:'Projects', href:'#/project/' + pr.id, title:'📋 ' + pr.name, sub:`${PROJECT_STATUS[pr.status]} · ${pr.ticket || 'nincs ticket'} · ${pr.participants.length} résztvevő`});
+    out.push({grp:'Projects', href:'#/project/' + pr.id, title:'📋 ' + pr.name, sub:`${PROJECT_STATUS[pr.status]} · ${pr.ticket || 'no ticket'} · ${pr.participants.length} participants`});
   for (const s of db.services) if (norm(s.name).includes(n))
-    out.push({grp:'Service', href:'#/people?service=' + s.id, title:'🧩 ' + s.name, sub:`${db.people.filter(p => p.serviceId === s.id).length} ember`});
+    out.push({grp:'Service', href:'#/people?service=' + s.id, title:'🧩 ' + s.name, sub:`${db.people.filter(p => p.serviceId === s.id).length} people`});
   for (const r of db.rooms) if (norm(r.name + ' ' + r.floor).includes(n))
     out.push({grp:'Floorplan', href:'#/room/' + r.id, title:(ROOM_KINDS[r.kind] || '🏢').split(' ')[0] + ' ' + r.name, sub:r.floor});
   return out.slice(0, 40);
@@ -215,7 +236,7 @@ function showResults(){
   box.innerHTML = list.length ? list.map((r, i) => {
     const g = r.grp !== grp ? `<div class="grp">${grp = r.grp}</div>` : '';
     return g + `<a href="${r.href}" data-i="${i}"${i === 0 ? ' class="act"' : ''}>${esc(r.title)}<small>${esc(r.sub)}</small></a>`;
-  }).join('') : '<div class="empty">Nincs találat.</div>';
+  }).join('') : '<div class="empty">No results.</div>';
   box.classList.add('show');
 }
 function closeSearch(){ $('#results').classList.remove('show'); $('#q').value = ''; $('#q').blur(); }

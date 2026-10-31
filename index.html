@@ -1,28 +1,29 @@
 <!doctype html>
-<html lang="hu">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IT Raktár</title>
+<title>TC IT Asset Management</title>
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
 <header>
-  <div class="brand">🗄️ IT Raktár</div>
+  <div class="brand">🗄️ TC IT Asset Management</div>
   <nav id="nav">
-    <a href="#/" data-r="">Áttekintés</a>
-    <a href="#/assets" data-r="assets">Eszközök</a>
-    <a href="#/people" data-r="people">Emberek</a>
+    <a href="#/" data-r="">Overview</a>
+    <a href="#/assets" data-r="assets">Assets</a>
+    <a href="#/people" data-r="people">People</a>
     <a href="#/rooms" data-r="rooms">Floorplan</a>
     <a href="#/projects" data-r="projects">Projects</a>
-    <a href="#/docs" data-r="docs">Dokumentumok</a>
+    <a href="#/docs" data-r="docs">Documents</a>
     <a href="#/log" data-r="log">Logs</a>
     <a href="#/settings" data-r="settings">Settings</a>
   </nav>
-  <button class="primary" onclick="startTour()" title="Automatikus bemutató a funkciókról">▶ Bemutató</button>
-  <a class="btn sm" id="userChip" href="#/settings/user" title="A naplóban megjelenő név"></a>
+  <button class="primary" onclick="startTour()" title="Automatic tour of the features">▶ Tour</button>
+  <button id="themeBtn" class="sm" onclick="toggleTheme()" title="Light / dark mode"></button>
+  <a class="btn sm" id="userChip" href="#/settings/user" title="The name shown in the log"></a>
   <div class="search">
-    <input id="q" type="search" placeholder="Keresés: név, Asset ID, sorozatszám, asztal, port, projekt… (Ctrl+K)" autocomplete="off">
+    <input id="q" type="search" placeholder="Search: name, Asset ID, serial, desk, port, ticket, project… (Ctrl+K)" autocomplete="off">
     <div id="results" class="results"></div>
   </div>
 </header>
@@ -30,7 +31,7 @@
 <dialog id="dlg"><form method="dialog" id="dlgForm"></form></dialog>
 <input type="file" id="importFile" accept=".json,application/json" hidden>
 
-<!-- Szerver nélküli prototípus: a sorrend számít (data → ui → modulok → app) -->
+<!-- Serverless prototype: the order matters (data → ui → modules → app) -->
 <script src="js/data.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/docs.js"></script>
@@ -38,6 +39,7 @@
 <script src="js/people.js"></script>
 <script src="js/floorplan.js"></script>
 <script src="js/projects.js"></script>
+<script src="js/labels.js"></script>
 <script src="js/settings.js"></script>
 <script src="js/tour.js"></script>
 <script src="js/app.js"></script>
