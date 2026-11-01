@@ -21,12 +21,12 @@ function viewPeople(params){
       <select id="pmode"><option value="">All Work Modes</option>${db.modes.map(m => `<option value="${esc(m.id)}"${m.id === mode ? ' selected' : ''}>${m.icon} ${esc(m.name)}</option>`).join('')}</select>
       <select id="pstatus"><option value="">All User Statuses</option>${Object.keys(USER_STATUS).map(s => `<option${s === st ? ' selected' : ''}>${s}</option>`).join('')}</select>
     </div>
-    ${list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Service</th><th>Job Role</th><th>Work Mode</th><th>User Status</th><th>Tickets</th><th>Desk</th><th>Assets</th><th>Protocol</th></tr></thead><tbody>${list.map(p => {
+    ${list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Service</th><th>Job Role</th><th>Work Mode</th><th>User Status</th><th>Tickets</th><th>Desk</th><th>Assets</th><th>Document</th></tr></thead><tbody>${list.map(p => {
       const pa = personAssets(p.id), all = [...pa.direct, ...pa.onDesk];
       return `<tr><td><a href="#/person/${p.id}">${esc(p.name)}</a><br><small class="muted">${esc(p.email)}</small></td>
         <td>${p.serviceId ? `<a href="#/people?service=${p.serviceId}">${esc(serviceName(p.serviceId))}</a>` : '<span class="muted">–</span>'}</td>
         <td>${esc(roleName(p.roleId)) || '<span class="muted">–</span>'}</td><td>${modePill(p.mode)}</td>
-        <td>${userPill(p.status)}${openReturns(p.id).length ? `<br><span class="pill warn">↩ ${openReturns(p.id).length} awaiting</span>` : ''}</td>
+        <td>${userPill(p.status)}${p.isd ? ' <span class="pill acc">ISD</span>' : ''}${openReturns(p.id).length ? `<br><span class="pill ${openReturns(p.id).some(returnOverdue) ? 'bad' : openReturns(p.id).some(r => returnDue(r)) ? 'warn' : ''}">↩ ${openReturns(p.id).length} awaiting</span>` : ''}</td>
         <td>${p.tickets.map(t => `<span class="tag">${esc(t.no)}</span>`).join('<br>') || '<span class="muted">–</span>'}</td>
         <td>${pa.desks.map(k => `<a href="#/room/${k.roomId}/${k.id}">${esc((room(k.roomId) || {}).name || '?')} › ${esc(k.label)}</a>`).join('<br>') || '<span class="muted">–</span>'}</td>
         <td>${all.map(a => `<a class="chip" href="#/asset/${a.id}">${typeIcon(a.type)} ${esc(a.tag)}</a>`).join(' ') || '<span class="muted">–</span>'}</td>
@@ -51,24 +51,35 @@ const statusEffect = (p, s) => {
   return `${n} assigned asset(s) will be listed as Awaiting Return. They stay assigned until each return is recorded; no asset moves and no history is removed.`;
 };
 function ticketDialog(pid){
-  const p = person(pid);
+  const p = person(pid), sp = p.suspension || {};
   openDialog(`<h3>Ticket / User Status – ${esc(p.name)}</h3>
     <div class="two"><div><label class="f">Ticket ID</label><input name="no" placeholder="e.g. INC-20417"></div>
       <div><label class="f">User Status</label><select name="status" id="tkStatus">${Object.keys(USER_STATUS).map(s => `<option${s === p.status ? ' selected' : ''}>${s}</option>`).join('')}</select></div></div>
+    <div class="two" id="tkSusp"><div><label class="f">Suspension Start Date *</label><input type="date" name="sStart" value="${esc(sp.start || '')}"></div><div><label class="f">Suspension End Date *</label><input type="date" name="sEnd" value="${esc(sp.end || '')}"></div></div>
+    <div id="tkLeave"><label class="f">End of Employment Date *</label><input type="date" name="endDate" value="${esc(p.endDate || '')}"></div>
     <label class="f">Note</label><input name="note">
     <div class="warnbox" id="tkEffect"></div>
     ${dlgActions('Confirm')}`,
     data => {
-      const no = data.no.trim(), note = data.note.trim(), changed = data.status !== p.status;
-      if (!no && !changed){ alert('Enter a ticket ID or choose a new User Status.'); return false; }
+      const no = data.no.trim(), note = data.note.trim(), st = data.status, changed = st !== p.status;
+      if (st === 'Suspended'){
+        if (!data.sStart || !data.sEnd){ alert('Suspension Start Date and Suspension End Date are required.'); return false; }
+        if (data.sStart > data.sEnd){ alert('The Suspension Start Date cannot be later than the Suspension End Date.'); return false; }
+      }
+      if (st === 'Leaver' && !data.endDate){ alert('End of Employment Date is required.'); return false; }
+      const nsp = st === 'Suspended' ? {start:data.sStart, end:data.sEnd} : null, nend = st === 'Leaver' ? data.endDate : '';
+      const datesChanged = JSON.stringify(nsp) !== JSON.stringify(p.suspension) || nend !== p.endDate;
+      if (!no && !changed && !datesChanged){ alert('Enter a ticket ID or change the User Status or its dates.'); return false; }
       if (no){
-        p.tickets.push({id:uid(), no, note, ts:Date.now(), statusFrom:changed ? p.status : null, statusTo:changed ? data.status : null});
+        p.tickets.push({id:uid(), no, note, ts:Date.now(), statusFrom:changed ? p.status : null, statusTo:changed ? st : null});
         log(null, `Ticket ${no} added to ${p.name}${note ? ' – ' + note : ''}`, 'status', {personId:p.id});
       }
-      if (changed) setUserStatus(p, data.status, no, note);
+      p.suspension = nsp; p.endDate = nend;
+      if (datesChanged && !changed) log(null, `Status dates of ${p.name}: ${nsp ? nsp.start + ' – ' + nsp.end : nend || 'cleared'}`, 'status', {personId:p.id});
+      if (changed) setUserStatus(p, st, no, [nsp && `${nsp.start} – ${nsp.end}`, nend && `end of employment ${nend}`, note].filter(Boolean).join(', '));
       save(); render();
     });
-  const upd = () => { $('#tkEffect').textContent = statusEffect(p, $('#tkStatus').value); };
+  const upd = () => { const s = $('#tkStatus').value; $('#tkEffect').textContent = statusEffect(p, s); $('#tkSusp').hidden = s !== 'Suspended'; $('#tkLeave').hidden = s !== 'Leaver'; };
   $('#tkStatus').addEventListener('change', upd); upd();
 }
 function removeTicket(pid, tid){
@@ -86,7 +97,7 @@ function awaitingHtml(p){
     <div class="tbl-wrap"><table><thead><tr><th>Asset ID</th><th>Asset Name</th><th>Return</th><th>Reason</th><th></th></tr></thead><tbody>${[...list, ...done].map(r => {
       const a = asset(r.assetId), pr = r.projectId && project(r.projectId);
       return `<tr><td>${a ? aidLink(a) : '<span class="muted">deleted</span>'}</td><td>${a ? esc(assetName(a)) : ''}</td>
-        <td><span class="pill ${{awaiting:'warn', returned:'ok'}[r.state] || ''}">${RETURN_STATE[r.state]}</span>${r.closedAt ? ` <small class="muted">${fmtTime(r.closedAt)}</small>` : ''}</td>
+        <td><span class="pill ${returnCls(r)}" data-ret="${r.id}">${RETURN_STATE[r.state]}</span>${returnBadge(r)}${r.closedAt ? ` <small class="muted">${fmtTime(r.closedAt)}</small>` : ''}</td>
         <td class="muted">${[r.sources.includes('status') ? 'User Status' : '', r.sources.includes('project') ? 'Replacement' : '', r.ticket].filter(Boolean).map(esc).join(' · ')}${pr ? ` · <a href="#/project/${pr.id}">${esc(pr.name)}</a>` : ''}</td>
         <td style="text-align:right;white-space:nowrap">${r.state === 'awaiting' && a ? `<button class="sm primary" onclick="toStorage('${a.id}')">↩ Record return</button> <button class="sm" onclick="markReturn('${r.id}','notRequired')">Not Required</button>` : ''}
           ${r.state === 'notRequired' ? `<button class="sm" onclick="markReturn('${r.id}','awaiting')">Expect return</button>` : ''}</td></tr>`;
@@ -109,18 +120,22 @@ function viewPerson(id){
       <button class="danger" onclick="deletePerson('${p.id}')">Delete</button></div>
     <div class="sub row" style="gap:10px">
       <span>User Status: ${userPill(p.status)}</span>
+      ${p.suspension ? `<span>Suspended: <b>${esc(p.suspension.start)} – ${esc(p.suspension.end)}</b></span>` : ''}
+      ${p.endDate ? `<span>End of Employment: <b>${esc(p.endDate)}</b></span>` : ''}
+      <span>ISD Member: <b id="pIsd">${p.isd ? 'Yes' : 'No'}</b></span>
+      ${db.accounts.filter(a => a.personId === p.id).map(a => `<span>Account: <b>${esc(a.username)}</b></span>`).join('')}
       <span>🧩 Service: ${p.serviceId ? `<a href="#/people?service=${p.serviceId}">${esc(serviceName(p.serviceId))}</a>` : '<span class="muted">none</span>'}</span>
       <span>Job Role: <b>${esc(roleName(p.roleId)) || '–'}</b></span>
-      <span>Work Mode:${modePill(p.mode)}</span>
+      <span>Work Mode: ${modePill(p.mode)}</span>
       ${p.email ? `<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>` : ''}</div>
     ${p.note ? `<div class="card" style="white-space:pre-wrap;margin-bottom:8px">${esc(p.note)}</div>` : ''}
     ${p.tickets.length ? `<div class="row" style="margin-bottom:8px"><span class="muted">Tickets:</span> ${p.tickets.map(t => `<span class="pill" title="${esc([fmtTime(t.ts), t.statusTo ? `${t.statusFrom} → ${t.statusTo}` : '', t.note].filter(Boolean).join(' · '))}"><span class="tag">${esc(t.no)}</span>${t.statusTo ? ' → ' + esc(t.statusTo) : ''} <a href="#" onclick="removeTicket('${p.id}','${t.id}');return false" title="Remove">✕</a></span>`).join(' ')}</div>` : ''}
     ${awaitingHtml(p)}
     <div class="loc-box"><b>${pa.direct.length + pa.onDesk.length}</b> assets in total:
       <b>${pa.direct.length}</b> assigned, <b>${pa.onDesk.length}</b> on their own office desk.</div>
-    ${unc.length ? `<div class="warnbox" style="font-size:14px">⚠️ ${unc.length} assigned asset(s) have no handover protocol yet:
+    ${unc.length ? `<div class="warnbox" style="font-size:14px">⚠️ ${unc.length} assigned asset(s) have no handover document yet:
       ${unc.map(a => `<b class="tag">${esc(a.tag)}</b>`).join(', ')}
-      <button class="sm" onclick="docDialog('${p.id}','out',[${unc.map(a => `'${a.id}'`).join(',')}])">📄 Create protocol</button></div>` : ''}
+      <button class="sm" onclick="docDialog('${p.id}','out',[${unc.map(a => `'${a.id}'`).join(',')}])">📄 Create document</button></div>` : ''}
     <div class="row"><h2>👤 Assigned assets</h2><span class="spacer"></span>
       <button class="sm" onclick="assignAssetDialog({kind:'person',id:'${p.id}'}, 'Check out asset: ${esc(p.name).replace(/'/g, '')}')">+ Check out existing asset</button>
       <button class="sm" onclick="assetForm(null,{kind:'person',id:'${p.id}'})">+ New asset</button>
@@ -128,16 +143,16 @@ function viewPerson(id){
     <div class="bulkbar" id="bulkbar" hidden>
       <b>✔ <span class="bulkCount">0</span> selected</b>
       <button onclick="bulkMove('storage')">↩ Return selected to Stock</button>
-      <button onclick="docDialog('${p.id}','out',[...selected])">📄 Handover protocol for selection</button>
-      <button onclick="docDialog('${p.id}','in',[...selected])">📄 Return protocol</button>
+      <button onclick="docDialog('${p.id}','out',[...selected])">📄 Handover document for selection</button>
+      <button onclick="docDialog('${p.id}','in',[...selected])">📄 Return document</button>
       <span class="spacer"></span><button class="sm" onclick="selected.clear(); render()">✕</button>
     </div>
     ${assetRows(pa.direct, {actions:back, select:true})}
     ${projects.length ? `<h2>📋 Projects</h2><div class="tbl-wrap"><table><thead><tr><th>Project</th><th>Status</th><th>Planned pickup</th></tr></thead><tbody>${projects.map(pr =>
       `<tr><td><a href="#/project/${pr.id}">${esc(pr.name)}</a></td><td>${projectStatusPill(pr.status)}</td><td>${fmtDate((pr.participants.find(x => x.personId === id) || {}).pickupDate || pr.pickupDate)}</td></tr>`).join('')}</tbody></table></div>` : ''}
     <div class="row"><h2>📄 Documents (${docs.length})</h2><span class="spacer"></span>
-      <button class="sm" onclick="docDialog('${p.id}','out')">+ Handover protocol</button>
-      <button class="sm" onclick="docDialog('${p.id}','in')">+ Return protocol</button></div>
+      <button class="sm" onclick="docDialog('${p.id}','out')">+ Handover document</button>
+      <button class="sm" onclick="docDialog('${p.id}','in')">+ Return document</button></div>
     ${docTable(docs)}
     ${swaps.length ? `<h2>🔁 Swaps (${swaps.length})</h2>${swapTable(swaps, {noWhere:true})}` : ''}
     <h2>🕘 History</h2>
@@ -158,13 +173,14 @@ function personForm(p, onCreated){
       <div><label class="f">Service</label><select name="serviceId">${selOpts(sortHu(db.services, s => s.name), p.serviceId, s => s.name, '– none –')}</select></div>
       <div><label class="f">Job Role</label><select name="roleId">${selOpts(sortHu(db.roles, r => r.name), p.roleId, r => r.name, '– none –')}</select></div>
     </div>
+    <label class="cb"><input type="checkbox" name="isd"${p.isd ? ' checked' : ''}> ISD Member</label>
     <label class="f">Work Mode</label>
     <select name="mode">${db.modes.map(m => `<option value="${esc(m.id)}"${m.id === p.mode ? ' selected' : ''}>${m.icon} ${esc(m.name)}</option>`).join('')}</select>
     <p class="muted" style="font-size:12px;margin:6px 0 0">New Services and Job Roles are created in Settings. The User Status is changed with the Ticket / User Status button.</p>
     <label class="f">Note (e.g. home address, phone)</label><textarea name="note">${esc(p.note)}</textarea>
     ${dlgActions(isNew ? 'Create' : 'Save')}`,
     data => {
-      const v = {name:data.name.trim(), email:data.email.trim(), serviceId:data.serviceId || null, roleId:data.roleId || null, mode:data.mode, note:data.note};
+      const v = {name:data.name.trim(), email:data.email.trim(), serviceId:data.serviceId || null, roleId:data.roleId || null, mode:data.mode, isd:!!data.isd, note:data.note};
       if (isNew){
         const n = {id:uid(), ...v, status:'Active', tickets:[]}; db.people.push(n); save();
         if (onCreated) onCreated(n); else location.hash = '#/person/' + n.id;
@@ -176,9 +192,10 @@ function deletePerson(id){
   if (db.projects.some(pr => pr.status !== 'completed' && pr.status !== 'cancelled' && pr.participants.some(x => x.personId === id))){
     alert('This person is a participant of an active project. Remove them from it first.'); return;
   }
-  if (!confirm(`Delete ${p.name}?\nTheir ${pa.direct.length} asset(s) go back to stock and their desk becomes free.\nTheir protocols stay in Documents.`)) return;
+  if (!confirm(`Delete ${p.name}?\nTheir ${pa.direct.length} asset(s) go back to stock and their desk becomes free.\nTheir documents stay in Documents.`)) return;
   for (const a of pa.direct) setHolder(a, {kind:'storage'});
   for (const k of pa.desks) k.personId = null;
+  for (const c of db.accounts) if (c.personId === id) c.personId = null;   // the account stays, without a person
   db.people = db.people.filter(x => x.id !== id); save(); location.hash = '#/people';
 }
 
@@ -273,7 +290,7 @@ function viewPeopleImport(){
             <optgroup label="Map to an existing one">${sortHu(db.services, s => s.name).map(s => `<option value="${s.id}"${pimp.svcMap[k] === s.id ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}</optgroup>
             <option value="__skip"${pimp.svcMap[k] === '__skip' ? ' selected' : ''}>Skip these rows</option></select></td></tr>`).join('')}</tbody></table></div>` : ''}
       <h2>3. Preview</h2>
-      <p>${PPLAN.new} ${cnt('new')} &nbsp; ${PPLAN.error} ${cnt('error')} &nbsp; Skipped:${cnt('exists') + cnt('dupfile')}
+      <p>${PPLAN.new} ${cnt('new')} &nbsp; ${PPLAN.error} ${cnt('error')} &nbsp; Skipped: ${cnt('exists') + cnt('dupfile')}
         <label class="cb" style="display:inline-flex;margin:0 0 0 12px"><input type="checkbox" id="pAllowDup"${pimp.allowDup ? ' checked' : ''}> Also create people whose name already exists</label></p>
       <div class="tbl-wrap"><table><thead><tr><th>Row</th><th>Action</th><th>Full Name</th><th>Service</th><th>Work Mode</th><th>Note</th></tr></thead><tbody>
         ${plan.slice(0, 200).map(p => `<tr><td class="muted">${p.row}</td><td>${PPLAN[p.action]}</td><td>${esc(p.name) || '<span class="muted">–</span>'}${p.exists ? ` <a href="#/person/${p.exists.id}" class="muted">(existing)</a>` : ''}</td>

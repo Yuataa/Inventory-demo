@@ -1,12 +1,14 @@
 'use strict';
-/* Settings: Services, Job Roles, Work Modes, Types & Models, Custom Field Sets, Dashboard, protocols, data, log user */
+/* Settings: Services, Job Roles, Work Modes, Types & Models, Custom Field Sets, Dashboard, documents, data, log user */
 
 const SETTINGS_TABS = [['services', '🧩 Services'], ['roles', '👔 Job Roles'], ['modes', '🏠 Work Modes'], ['types', '🏷️ Types & Models'], ['fields', '🧾 Custom Field Sets'],
-  ['dashboard', '📊 Dashboard'], ['docs', '📄 Protocols'], ['data', '💾 Data'], ['user', '👤 User']];
+  ['dashboard', '📊 Dashboard'], ['docs', '📄 Documents'], ['data', '💾 Data'], ['user', '👤 User']];
+const SETTINGS_PERM = {services:'settings.services', roles:'settings.roles', modes:'settings.modes', types:'settings.types', fields:'settings.fields', dashboard:'settings.dashboard', docs:'documents.templates', data:'settings.data'};
 function viewSettings(tab, sub, params = new URLSearchParams()){
-  tab = SETTINGS_TABS.some(t => t[0] === tab) ? tab : 'services';
+  const tabs = SETTINGS_TABS.filter(t => !SETTINGS_PERM[t[0]] || can(SETTINGS_PERM[t[0]]));
+  tab = tabs.some(t => t[0] === tab) ? tab : tabs[0][0];
   const body = {services:setServices, roles:setRoles, modes:setModes, types:() => setTypes(params), fields:() => sub ? setFieldSet(sub) : setFields(), dashboard:setDashboard, docs:setDocs, data:setData, user:setUser}[tab]();
-  return `<h1>Settings</h1><div class="tabs">${SETTINGS_TABS.map(([k, l]) => `<a href="#/settings/${k}" class="${k === tab ? 'on' : ''}">${l}</a>`).join('')}</div>${body}`;
+  return `<h1>Settings</h1><div class="tabs">${tabs.map(([k, l]) => `<a href="#/settings/${k}" class="${k === tab ? 'on' : ''}">${l}</a>`).join('')}</div>${body}`;
 }
 
 // ---------- services ----------
@@ -271,7 +273,7 @@ function bindFieldSet(id){
 function fieldForm(setId, fieldId){
   const s = byId(db.fieldSets, setId), f = fieldId ? s.fields.find(x => x.id === fieldId) : null, isNew = !f;
   const v = f || {name:'', kind:'text', required:false, options:[]};
-  openDialog(`<h3>${isNew ? 'New field' : 'Edit field'} –${esc(s.name)}</h3>
+  openDialog(`<h3>${isNew ? 'New field' : 'Edit field'} – ${esc(s.name)}</h3>
     <div class="two"><div><label class="f">Field name</label><input name="name" required value="${esc(v.name)}" placeholder="e.g. Screen Size"></div>
       <div><label class="f">Field type</label><select name="kind" id="ffKind">${Object.entries(FIELD_KINDS).map(([k, l]) => `<option value="${k}"${k === v.kind ? ' selected' : ''}>${l}</option>`).join('')}</select></div></div>
     <div id="ffOpts"${v.kind === 'select' ? '' : ' style="display:none"'}><label class="f">Options (one per line)</label><textarea name="options" style="width:100%" rows="4">${esc(v.options.join('\n'))}</textarea></div>
@@ -299,26 +301,51 @@ function deleteFieldSet(id){
   db.fieldSets = db.fieldSets.filter(x => x.id !== id); save(); location.hash = '#/settings/fields';
 }
 
-// ---------- protocol texts ----------
+// ---------- document templates: finished documents keep the template they were made with ----------
+let tplKind = 'out';
+const TPL_TEXT = {out:'outText', in:'inText', swap:'swapText'};
 function setDocs(){
-  const s = db.settings;
-  return `<div class="card">
+  const s = db.settings, show = {service:'Service', email:'E-mail', mode:'Work Mode', logo:'Company logo', note:'Note'};
+  return `<div class="tplgrid"><div class="card">
     <div class="two">
       <div><label class="f">Company name (header)</label><input id="sCompany" value="${esc(s.company)}"></div>
       <div><label class="f">Address (header)</label><input id="sAddress" value="${esc(s.address)}"></div>
       <div><label class="f">Default IT handler name</label><input id="sHandler" value="${esc(s.handler)}"></div>
+      <div><label class="f">Footer</label><input id="sFooter" value="${esc(s.docFooter)}"></div>
     </div>
-    <label class="f">Handover statement</label><textarea id="sOut" rows="6" style="width:100%">${esc(s.outText)}</textarea>
-    <label class="f">Return statement</label><textarea id="sIn" rows="4" style="width:100%">${esc(s.inText)}</textarea>
-    <label class="f">Swap statement</label><textarea id="sSwap" rows="4" style="width:100%">${esc(s.swapText)}</textarea>
+    <label class="f">Fields on the documents</label><div class="row">${Object.entries(show).map(([k, l]) => `<label class="cb" style="margin:2px 8px 2px 0"><input type="checkbox" data-show="${k}"${s.docShow[k] ? ' checked' : ''}> ${l}</label>`).join('')}</div>
+    <label class="f">Template</label><select id="sKind">${Object.entries(DOC_KINDS).map(([k, v]) => `<option value="${k}"${k === tplKind ? ' selected' : ''}>${v.label}</option>`).join('')}</select>
+    <label class="f">Title</label><input id="sTitle" value="${esc(s.docTitles[tplKind])}">
+    <label class="f">Statement</label><textarea id="sText" rows="7" style="width:100%">${esc(s[TPL_TEXT[tplKind]])}</textarea>
     <div class="row" style="margin-top:12px"><button class="primary" onclick="saveDocSettings()">Save</button>
-      <button onclick="if(confirm('Restore the default statements?')){Object.assign(db.settings,{outText:DEFAULT_SETTINGS.outText,inText:DEFAULT_SETTINGS.inText,swapText:DEFAULT_SETTINGS.swapText});save();render();}">Restore default text</button>
-      <span class="muted" style="font-size:12px">Have the sample statements reviewed by HR / legal.</span></div></div>`;
+      <button onclick="if(confirm('Restore the default statements?')){Object.assign(db.settings,{outText:DEFAULT_SETTINGS.outText,inText:DEFAULT_SETTINGS.inText,swapText:DEFAULT_SETTINGS.swapText,docTitles:{...DEFAULT_SETTINGS.docTitles}});save();render();}">Restore default text</button></div>
+    <p class="muted" style="font-size:12px">Saved changes apply to new documents only. Have the sample statements reviewed by HR / legal.</p></div>
+    <div class="card"><b>Preview</b><iframe id="tplPrev" title="Document preview" style="width:100%;height:520px;border:1px solid var(--line);background:#fff;margin-top:8px"></iframe></div></div>
+    <h2>✍ Electronic signature</h2>
+    <div class="card" style="max-width:640px"><div class="row"><label class="muted">Planned provider</label><select id="sEsign"><option value="">None</option>${Object.entries(ESIGN_PROVIDERS).map(([k, v]) => `<option value="${k}"${k === s.esignProvider ? ' selected' : ''}>${v}</option>`).join('')}</select><span class="pill warn">Not connected</span></div>
+      <p class="muted" style="font-size:12px;margin-bottom:0">Preparation only. Both services need a server to hold the API keys, so nothing is sent from here. Until then use print, sign and “Upload signed”.</p></div>`;
+}
+function docDraftTpl(){
+  const show = {}; document.querySelectorAll('[data-show]').forEach(c => { show[c.dataset.show] = c.checked; });
+  return {title:$('#sTitle').value, text:$('#sText').value, footer:$('#sFooter').value, show, company:$('#sCompany').value, address:$('#sAddress').value, logoId:db.settings.branding.logoId};
+}
+function docSample(tpl){
+  const p = db.people[0], items = db.assets.slice(0, 2).map(snapAsset);
+  return {no:'SAMPLE-0001', kind:tplKind, personId:p ? p.id : null, personName:p ? p.name : 'Sample Person', date:todayIso(), handler:$('#sHandler').value, note:'Sample note', reason:'Failure', tpl,
+    items:tplKind === 'swap' ? items.map((x, i) => ({...x, role:i ? 'out' : 'in'})) : items};
+}
+function bindDocSettings(){
+  const upd = () => { $('#tplPrev').srcdoc = docHtml(docSample(docDraftTpl())); };
+  document.querySelectorAll('.tplgrid input, .tplgrid textarea').forEach(el => el.addEventListener('input', upd));
+  $('#sKind').addEventListener('change', e => { tplKind = e.target.value; render(); });
+  $('#sEsign').addEventListener('change', e => { db.settings.esignProvider = e.target.value; clog(`E-signature provider planned: ${ESIGN_PROVIDERS[e.target.value] || 'none'}`); save(); });
+  upd();
 }
 function saveDocSettings(){
-  Object.assign(db.settings, {company:$('#sCompany').value.trim(), address:$('#sAddress').value.trim(), handler:$('#sHandler').value.trim(),
-    outText:$('#sOut').value.trim(), inText:$('#sIn').value.trim(), swapText:$('#sSwap').value.trim()});
-  save(); toast('Settings saved.'); render();
+  const t = docDraftTpl(), s = db.settings;
+  Object.assign(s, {company:t.company, address:t.address, handler:$('#sHandler').value.trim(), docFooter:t.footer, docShow:t.show});
+  s.docTitles[tplKind] = t.title; s[TPL_TEXT[tplKind]] = t.text;
+  clog('Document template saved: ' + DOC_KINDS[tplKind].label); save(); toast('Settings saved.'); render();
 }
 
 // ---------- data ----------
@@ -326,7 +353,7 @@ function setData(){
   const kb = Math.round(JSON.stringify(db).length / 1024), imgKb = Math.round(JSON.stringify(db.images).length / 1024);
   return `<div class="sub">Data is stored in this browser (localStorage, signed PDFs in IndexedDB). There is no backend or database. Make regular backups!</div>
     <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr))">
-      <div class="card"><b>Backup (export)</b><p class="muted">All data, including images and signed protocols, in one JSON file. Also the way to hand it to a colleague.</p><button class="primary" onclick="exportJSON()">⬇ JSON backup</button></div>
+      <div class="card"><b>Backup (export)</b><p class="muted">All data, including images and signed documents, in one JSON file. Also the way to hand it to a colleague.</p><button class="primary" onclick="exportJSON()">⬇ JSON backup</button></div>
       <div class="card"><b>Restore (import)</b><p class="muted">Load a JSON backup – this overwrites the current data. Older backups are supported.</p><button onclick="$('#importFile').click()">⬆ Load JSON</button></div>
       <div class="card"><b>Import assets</b><p class="muted">From the Excel template (larger orders) or a Snipe-IT export.</p><a class="btn" href="#/import">⬆ Asset import</a></div>
       <div class="card"><b>Import people</b><p class="muted">From Excel: Full Name, Service, Work Mode.</p><a class="btn" href="#/people/import">⬆ People import</a></div>
@@ -336,7 +363,7 @@ function setData(){
     </div>
     <h2>Statistics</h2>
     <p>${db.assets.length} assets (last Asset ID: ${db.seq.asset ? fmtAssetId(db.seq.asset) : '–'}) · ${db.people.length} people · ${db.services.length} Services · ${db.rooms.length} rooms · ${db.projects.length} projects ·
-      ${db.docs.length} protocols (${db.docs.filter(d => d.fileId).length} signed) · ${db.log.length} log entries</p>
+      ${db.docs.length} documents (${db.docs.filter(d => d.fileId).length} signed) · ${db.log.length} log entries</p>
     <p class="muted">Storage used: about ${kb} KB (images: ${imgKb} KB) of the browser's roughly 5000 KB limit.</p>`;
 }
 async function exportJSON(){
@@ -361,11 +388,12 @@ async function importJSONFile(f){
 function resetDemo(){ if (confirm('Restore the demo data? The current data and uploaded signed documents are lost.')){ idb.clear().catch(() => {}); db = demo(); save(); location.hash = '#/'; render(); } }
 function wipe(){ if (confirm('ALL data is deleted, including uploaded signed documents. Are you sure? (Make a JSON backup first.)')){ idb.clear().catch(() => {}); db = migrate({version:2, modes:DEFAULT_MODES.map(m => ({...m}))}); save(); location.hash = '#/'; render(); } }
 
-// ---------- log user ----------
+// ---------- active account ----------
 function setUser(){
-  return `<div class="card" style="max-width:520px"><b>Who is working in this browser?</b>
-    <p class="muted">The prototype has no login. The name entered here goes into the “By” column of the log (stored in this browser only).</p>
-    <label class="f">Name</label><input id="uName" value="${esc(currentUser())}" list="uList" placeholder="e.g. Molnár Tamás"><datalist id="uList">${sortHu(db.people, p => p.name).map(p => `<option value="${esc(p.name)}">`).join('')}</datalist>
-    <div class="row" style="margin-top:12px"><button class="primary" onclick="saveUser()">Save</button></div></div>`;
+  const cur = currentAccount();
+  return `<div class="card" style="max-width:520px"><b>Which account is using this browser?</b>
+    <p class="muted">The prototype has no passwords. The chosen account decides what is available here, and its name goes into the “By” column of the log (stored in this browser only).</p>
+    <label class="f">Account</label><select id="uAcc">${db.accounts.filter(a => a.enabled).map(a => `<option value="${a.id}"${a.id === cur.id ? ' selected' : ''}>${esc(a.displayName)} (${a.role})</option>`).join('')}</select>
+    <div class="row" style="margin-top:12px"><button class="primary" onclick="saveUser()">Switch</button></div></div>`;
 }
-function saveUser(){ try { localStorage.setItem(USER_KEY, $('#uName').value.trim()); } catch(e) {} toast('Saved – this name appears in the log.'); renderUserChip(); }
+function saveUser(){ try { localStorage.setItem(ACCOUNT_KEY, $('#uAcc').value); } catch(e) {} toast('Switched to ' + currentUser()); applyAccountUi(); render(); }

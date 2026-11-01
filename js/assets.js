@@ -12,6 +12,7 @@ function filterAssets(P){
   if (f('loc')) list = list.filter(a => a.holder.kind === f('loc'));
   if (f('status')) list = list.filter(a => a.status === f('status'));
   if (f('service')) list = list.filter(a => assetServiceIs(a, f('service')));
+  if (f('office')) list = list.filter(a => assetOfficeId(a) === f('office'));
   if (f('room')) list = list.filter(a => assetRoomId(a) === f('room'));
   if (f('person')) list = list.filter(a => a.holder.kind === 'person' && a.holder.id === f('person'));
   if (f('mode')) list = list.filter(a => (assetPerson(a) || {}).mode === f('mode'));
@@ -53,6 +54,7 @@ function dashTile(it){
     return tile('#/assets' + (qs ? '?' + qs : ''), list.length, sub, it.breakdown ? typeBreak(list, qs) : '');
   }
   if (it.id === 'returns') return tile('#/assets?view=awaiting', db.returns.filter(r => r.state === 'awaiting').length);
+  if (it.id === 'transit') return tile('#/assets?view=transit', db.assets.filter(a => a.holder.kind === 'transit').length);
   if (it.id === 'projects') return tile('#/projects?status=active', db.projects.filter(isActive).length);
   if (it.id === 'unsigned') return tile('#/docs?f=wait', db.docs.filter(d => !d.fileId).length);
   return tile('#/docs', db.people.reduce((n, p) => n + uncovered(p.id).length, 0));
@@ -85,7 +87,7 @@ function viewDashboard(){
 }
 
 // ---------- asset list ----------
-const LOC_LABEL = {desk:'🪑 On a desk / in a rack', office:'🏢 In the office pool', person:'👤 Assigned to a person', storage:'📦 In Stock'};
+const LOC_LABEL = {desk:'🪑 On a desk / in a rack', office:'🏢 In a room pool', site:'🏢 At an office, not placed', transit:'🚚 In transit', person:'👤 Assigned to a person', storage:'📦 In Stock'};
 function viewAssets(params){
   const f = k => params.get(k) || '';
   const list = sortHu(filterAssets(params), a => a.tag), V = ASSET_VIEWS[f('view')], type = f('type'), mdl = f('model');
@@ -106,7 +108,8 @@ function viewAssets(params){
       <select id="fview" title="View"><option value="">All assets</option>${Object.entries(ASSET_VIEWS).map(([k, x]) => opt(k, f('view'), x.title)).join('')}</select>
       <select id="ftype" title="Asset Type"><option value="">All types</option>${sortHu(db.types, t => t.name).map(t => opt(t.id, type, `${t.icon} ${esc(t.name)}`)).join('')}</select>
       <select id="fmodel" title="Model"><option value="">All models</option>${models.map(m => opt(m.id, mdl, esc(m.name))).join('')}</select>
-      <select id="froom" title="Office"><option value="">All Offices</option>${sortHu(db.rooms, r => r.name).map(r => opt(r.id, f('room'), esc(r.name))).join('')}</select>
+      <select id="foffice" title="Office"><option value="">All Offices</option>${sortHu(db.offices, o => o.name).map(o => opt(o.id, f('office'), esc(o.name))).join('')}</select>
+      <select id="froom" title="Room"><option value="">All Rooms</option>${sortHu(db.rooms.filter(r => !f('office') || r.officeId === f('office')), r => roomPath(r)).map(r => opt(r.id, f('room'), esc(roomPath(r)))).join('')}</select>
       <select id="fperson" title="Employee"><option value="">All employees</option>${sortHu(db.people, p => p.name).map(p => opt(p.id, f('person'), esc(p.name))).join('')}</select>
       <select id="fsvc" title="Service"><option value="">All Services</option>${sortHu(db.services, s => s.name).map(s => opt(s.id, f('service'), esc(s.name))).join('')}</select>
       <select id="fmode" title="Work Mode"><option value="">All Work Modes</option>${db.modes.map(m => opt(m.id, f('mode'), `${m.icon} ${esc(m.name)}`)).join('')}</select>
@@ -130,10 +133,11 @@ function viewAssets(params){
     ${assetRows(list, {select:true})}`;
 }
 function bindAssetFilters(){
-  const ids = {q:'#fq', view:'#fview', type:'#ftype', model:'#fmodel', room:'#froom', person:'#fperson', service:'#fsvc', mode:'#fmode', loc:'#floc', status:'#fstatus', warr:'#fwarr', health:'#fhealth', age:'#fage'};
+  const ids = {q:'#fq', view:'#fview', type:'#ftype', model:'#fmodel', office:'#foffice', room:'#froom', person:'#fperson', service:'#fsvc', mode:'#fmode', loc:'#floc', status:'#fstatus', warr:'#fwarr', health:'#fhealth', age:'#fage'};
   const upd = () => {
     const p = new URLSearchParams();
     for (const [k, sel] of Object.entries(ids)) if ($(sel) && $(sel).value) p.set(k, $(sel).value);
+    if (p.get('room') && p.get('office') && (room(p.get('room')) || {}).officeId !== p.get('office')) p.delete('room');
     // a model that does not belong to the newly chosen type is dropped
     if (p.get('model') && p.get('type') && (model(p.get('model')) || {}).typeId !== p.get('type')) p.delete('model');
     history.replaceState(null, '', '#/assets' + (p.toString() ? '?' + p : ''));
@@ -155,12 +159,14 @@ function releaseReservation(r, a){
 async function confirmMove(list, h){
   list = list.filter(a => holderKey(a.holder) !== holderKey(h));
   if (!list.length) return true;
+  const moving = list.filter(a => a.holder.kind === 'transit');
+  if (moving.length){ alert(`${moving.map(a => a.tag).join(', ')} is in transit. Record the shipment as received first.`); return false; }
   const target = h.kind === 'person' ? person(h.id) : null, targetText = holderText(h);
   const notes = [], conflicts = [];
-  const office = list.filter(a => target && (a.holder.kind === 'office' || a.holder.kind === 'desk'));
+  const atOffice = list.filter(a => target && ['office', 'desk', 'site'].includes(a.holder.kind));
   const other = list.filter(a => target && a.holder.kind === 'person');
   const back = list.filter(a => !target && (h.kind === 'storage' || a.holder.kind === 'person'));
-  if (office.length) notes.push(`This asset is currently assigned to an office location. Do you want to assign it directly to this employee?`);
+  if (atOffice.length) notes.push(`This asset is currently assigned to an office location. Do you want to assign it directly to this employee?`);
   if (other.length) notes.push(`${other.length === 1 ? 'This asset is' : 'These assets are'} currently assigned to ${[...new Set(other.map(a => (assetPerson(a) || {}).name || '?'))].join(', ')}. The existing assignment ends and the change is logged.`);
   if (back.length) notes.push(`${back.length === 1 ? 'This asset' : `${back.length} assets`} will be returned to: ${targetText}.`);
   for (const a of list){
@@ -189,10 +195,10 @@ async function bulkMove(hs){
   for (const a of list) setHolder(a, h);
   selected.clear(); save(); render();
   if (h.kind === 'person'){
-    if (confirm(`${list.length} asset(s) checked out to ${person(h.id).name}.\n\nCreate a handover protocol for them?`)) docDialog(h.id, 'out', list.map(a => a.id));
+    if (confirm(`${list.length} asset(s) checked out to ${person(h.id).name}.\n\nCreate a handover document for them?`)) docDialog(h.id, 'out', list.map(a => a.id));
   } else if (from.size === 1){
     const [pid, ids] = [...from][0];
-    if (confirm(`${ids.length} asset(s) returned from ${person(pid).name}.\n\nCreate a return protocol?`)) docDialog(pid, 'in', ids);
+    if (confirm(`${ids.length} asset(s) returned from ${person(pid).name}.\n\nCreate a return document?`)) docDialog(pid, 'in', ids);
   }
 }
 function bulkStatus(){
@@ -210,11 +216,12 @@ function returnAll(pid){
 // the Return to Stock dialog: shows what comes back from where, the dialog itself is the confirmation
 function toStorage(id){
   const a = asset(id), pid = a.holder.kind === 'person' ? a.holder.id : null;
+  if (a.holder.kind === 'transit'){ alert('This asset is in transit. Record the shipment as received first.'); return; }
   openDialog(`<h3>↩ Return to Stock</h3>
     <div class="tbl-wrap"><table><thead><tr><th>Asset ID</th><th>Asset Name</th><th>Current Location</th></tr></thead><tbody><tr><td class="tag">${esc(a.tag)}</td><td>${esc(assetName(a))}</td><td>${esc(whereText(a))}</td></tr></tbody></table></div>
-    <div class="two"><div><label class="f">Return to</label><select name="target"><option value="storage">📦 In Stock</option>${sortHu(db.rooms, r => r.name).map(r => `<option value="office:${r.id}">🏢 ${esc(r.name)}</option>`).join('')}</select></div>
+    <div class="two"><div><label class="f">Return to</label><select name="target"><option value="storage">📦 In Stock</option>${sortHu(db.offices, o => o.name).map(o => `<option value="site:${o.id}">🏢 ${esc(o.name)}</option>`).join('')}${sortHu(db.rooms, r => roomPath(r)).map(r => `<option value="office:${r.id}">🏢 ${esc(roomPath(r))}</option>`).join('')}</select></div>
       <div><label class="f">Status after return</label><select name="status">${Object.entries(STATUS).map(([k, s]) => `<option value="${k}"${k === a.status ? ' selected' : ''}>${s.label}</option>`).join('')}</select></div></div>
-    ${pid ? `<label class="cb"><input type="checkbox" name="mkdoc"> Create a return protocol</label>` : ''}
+    ${pid ? `<label class="cb"><input type="checkbox" name="mkdoc"> Create a return document</label>` : ''}
     ${dlgActions('Confirm return')}`,
     data => {
       const r = reservedBy(a.id); if (r) releaseReservation(r, a);
@@ -263,7 +270,7 @@ function viewAsset(id){
       <button onclick="labelDialog(['${a.id}'])">🏷 Label</button>
       <button onclick="assetForm(asset('${a.id}'))">✎ Edit</button>
       <button class="danger" onclick="deleteAsset('${a.id}')">Delete</button></div>
-    <div class="sub"><b>${esc(assetName(a))}</b> · ${typeLink(a)} · ${modelLink(a)}${a.serial ? ` · S/N <span class="tag">${esc(a.serial)}</span>${copyBtn(a.serial)}` : ''}${a.legacyTag ? ` · legacy ID:${esc(a.legacyTag)}` : ''}</div>
+    <div class="sub"><b>${esc(assetName(a))}</b> · ${typeLink(a)} · ${modelLink(a)}${a.serial ? ` · S/N <span class="tag">${esc(a.serial)}</span>${copyBtn(a.serial)}` : ''}${a.legacyTag ? ` · legacy ID: ${esc(a.legacyTag)}` : ''}</div>
     <div class="loc-box">Currently: <b>${holderLink(a.holder)}</b>${a.placement ? `<br><span style="font-size:14px">${esc(placementText(a))} – <a href="#/room/${(desk(a.placement.deskId) || {}).roomId}/${a.placement.deskId}">open on the floorplan</a></span>` : ''}
       ${res ? `<br><span style="font-size:14px">📋 Reserved for project: <a href="#/project/${res.project.id}">${esc(res.project.name)}</a>${res.part ? ' – ' + esc((person(res.part.personId) || {}).name || '?') : ''}${res.prep ? ` · <b>${esc(res.prep)}</b>` : ''} (not checked out yet)</span>` : ''}
       ${ret ? `<br><span style="font-size:14px">↩ <b>${RETURN_STATE[ret.state]}</b> from ${personLink(ret.personId)}${ret.state === 'awaiting' ? ` <button class="sm" onclick="toStorage('${a.id}')">Record return</button>` : ''}</span>` : ''}</div>
@@ -295,7 +302,7 @@ function viewAsset(id){
     ${fields.length ? `<h2>Custom fields <span class="muted" style="font-weight:400">(${esc([...new Set(fields.map(f => f.setName))].join(', '))})</span></h2>
       <div class="card"><dl class="kv">${fields.map(f => `<dt>${esc(f.name)}${f.required ? ' *' : ''}</dt><dd>${esc(fieldValueText(f, a.custom[f.id]))}</dd>`).join('')}</dl></div>` : ''}
     ${swaps.length ? `<h2>🔁 Swaps</h2>${swapTable(swaps)}` : ''}
-    ${docs.length ? `<h2>📄 Protocols that include it</h2>${docTable(docs, true)}` : ''}
+    ${docs.length ? `<h2>📄 Documents that include it</h2>${docTable(docs, true)}` : ''}
     <h2>History</h2>
     ${logTable(hist, {noSubject:true})}`;
 }
@@ -438,7 +445,7 @@ function assetForm(a, presetHolder, presetType){
 // pick an existing asset and move it to holder h (person page "issue existing asset")
 function assignAssetDialog(h, title){
   const key = holderKey(h);
-  const cands = sortHu(db.assets.filter(a => holderKey(a.holder) !== key && a.status !== 'retired'), a => (a.holder.kind === 'storage' ? '0' : '1') + a.tag);
+  const cands = sortHu(db.assets.filter(a => holderKey(a.holder) !== key && a.status !== 'retired' && a.holder.kind !== 'transit'), a => (a.holder.kind === 'storage' ? '0' : '1') + a.tag);
   if (!cands.length){ alert('There is no asset to move. Create one first.'); return; }
   openDialog(`<h3>${esc(title)}</h3><p class="muted" style="margin:0 0 6px">Target: <b>${esc(holderText(h))}</b></p>
     <label class="f">Asset</label>${picker('asset', cands.map(a => `<option value="${a.id}">${typeIcon(a.type)} ${esc(a.tag)} · ${esc(assetName(a))} · ${esc(a.serial)} — ${esc(whereText(a))}</option>`).join(''), {size:10, required:true})}
@@ -453,12 +460,13 @@ function assignAssetDialog(h, title){
 function swapDialog(oldId){
   const old = asset(oldId);
   if (old.holder.kind === 'storage'){ alert('An asset in stock does not need a swap – swaps are for assets in use.'); return; }
+  if (old.holder.kind === 'transit'){ alert('This asset is in transit. Record the shipment as received first.'); return; }
   const cands = sortHu(db.assets.filter(a => a.holder.kind === 'storage' && a.status === 'ok' && !reservedBy(a.id)), a => (a.type === old.type ? '0' : '1') + a.tag);
   if (!cands.length){ alert('There is no free working asset in stock. Add one first, then do the swap.'); return; }
   const owner = holderPerson(old.holder), hasSame = cands.some(a => a.type === old.type);
   openDialog(`
     <h3>🔁 Asset swap</h3>
-    <div class="loc-box" style="font-size:14px;margin-top:4px">Replacing:${assetIcon(old)} <b class="aid">${esc(old.tag)}</b> · ${esc(typeLabel(old.type))} · ${esc(modelName(old))}<br>
+    <div class="loc-box" style="font-size:14px;margin-top:4px">Replacing: ${assetIcon(old)} <b class="aid">${esc(old.tag)}</b> · ${esc(typeLabel(old.type))} · ${esc(modelName(old))}<br>
       <small class="muted">${esc(whereText(old))}</small></div>
     <div class="two">
       <div><label class="f">Reason</label><select name="reason" id="swReason">${Object.entries(SWAP_REASONS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
@@ -473,7 +481,7 @@ function swapDialog(oldId){
       <div><label class="f">Date</label><input type="date" name="date" required value="${todayIso()}"></div>
       <div><label class="f">Handed over by (IT)</label><input name="handler" value="${esc(db.settings.handler)}"></div>
     </div>
-    ${owner ? `<label class="cb"><input type="checkbox" name="mkdoc" checked> Create a swap protocol –${esc(person(owner).name)}</label>` : '<p class="muted" style="font-size:12px">Asset at a shared location – no protocol is created, the swap is recorded in the register.</p>'}
+    ${owner ? `<label class="cb"><input type="checkbox" name="mkdoc" checked> Create a swap document – ${esc(person(owner).name)}</label>` : '<p class="muted" style="font-size:12px">Asset at a shared location – no document is created, the swap is recorded in the register.</p>'}
     ${dlgActions('Do the swap')}`,
     data => {
       const nw = asset(data.newId);
@@ -508,7 +516,7 @@ function swapDialog(oldId){
 function swapTable(list, opts = {}){
   if (!list.length) return '<div class="empty">No swaps yet.</div>';
   const tagLink = (id, tag) => asset(id) ? `<a class="tag" href="#/asset/${id}">${esc(asset(id).tag)}</a>` : `<span class="tag">${esc(tag)}</span>`;
-  return `<div class="tbl-wrap"><table><thead><tr><th>Date</th>${opts.noWhere ? '' : '<th>Person / place</th>'}<th>Replaced asset</th><th></th><th>Replacement</th><th>Reason</th><th>Replaced asset now</th><th>Protocol</th></tr></thead><tbody>${list.map(s => {
+  return `<div class="tbl-wrap"><table><thead><tr><th>Date</th>${opts.noWhere ? '' : '<th>Person / place</th>'}<th>Replaced asset</th><th></th><th>Replacement</th><th>Reason</th><th>Replaced asset now</th><th>Document</th></tr></thead><tbody>${list.map(s => {
     const o = asset(s.oldId), d = s.docId && byId(db.docs, s.docId);
     return `<tr><td style="white-space:nowrap">${fmtDate(s.date)}</td>
       ${opts.noWhere ? '' : `<td>${s.personId && person(s.personId) ? personLink(s.personId) : esc(s.where)}</td>`}
@@ -748,7 +756,7 @@ function viewImport(){
         <p class="muted" style="font-size:12px;margin:0">Asset IDs (HU……) are assigned automatically; the ID in the file is kept as Legacy ID.</p>
       </div>
       <h2>3. Preview</h2>
-      <p>${PLAN_LABEL.new} ${cnt('new')} &nbsp; Skipped: ${cnt('dup') + cnt('empty')} &nbsp; · New people: ${newPeople}${newTypes.length ? ` · New types:${newTypes.map(esc).join(', ')}` : ''}</p>
+      <p>${PLAN_LABEL.new} ${cnt('new')} &nbsp; Skipped: ${cnt('dup') + cnt('empty')} &nbsp; · New people: ${newPeople}${newTypes.length ? ` · New types: ${newTypes.map(esc).join(', ')}` : ''}</p>
       <div class="tbl-wrap"><table><thead><tr><th>Action</th><th>Legacy ID</th><th>Type</th><th>Model</th><th>Serial Number</th><th>Status</th><th>Goes to</th><th>Arrived</th><th>Warranty</th></tr></thead><tbody>
         ${plan.slice(0, 50).map(p => `<tr><td>${PLAN_LABEL[p.action]}</td><td class="tag">${esc(p.legacy) || '<span class="muted">–</span>'}</td>
           <td>${p.type.id ? typeIcon(p.type.id) + ' ' + esc(typeLabel(p.type.id)) : '📦 ' + esc(p.type.newType) + ' <span class="pill warn">new type</span>'}</td>

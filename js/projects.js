@@ -1,11 +1,42 @@
 'use strict';
 /* Projects: preparing equipment for named people or for a demand without names yet.
-   Planned quantities, selected assets and issued assets are separate: selected assets are only reserved, the checkout and the protocol
+   Planned quantities, selected assets and issued assets are separate: selected assets are only reserved, the checkout and the document
    happen at completion through the regular flow. Cables are checklist items only. Replaced assets use the shared return records (db.returns). */
 
 const SLOTS = [['computerId', 'computer', 'Computer'], ['monitorId', 'monitor', 'Monitor'], ['monitor2Id', 'monitor2', '2nd Monitor']];
 const isActive = pr => pr.status !== 'completed' && pr.status !== 'cancelled';
-const projectStatusPill = s => `<span class="pill ${{completed:'ok', cancelled:'bad', ready:'acc', progress:'warn'}[s] || ''}">${PROJECT_STATUS[s] || s}</span>`;
+const projectStatusPill = s => `<span class="pill ${{completed:'ok', cancelled:'bad', ready:'acc', progress:'warn'}[s] || ''}">${s === 'completed' ? '✅ ' : ''}${PROJECT_STATUS[s] || s}</span>`;
+const hasAct = (pr, a) => pr.activities.includes(a);
+const actPills = pr => pr.activities.map(a => `<span class="pill acc">${esc(ACTIVITIES[a])}</span>`).join(' ');
+const shipRoute = s => s.fromOfficeId && s.toOfficeId ? `${shipOffice(s.fromOfficeId)} → ${shipOffice(s.toOfficeId)}` : `to ${(person(s.recvPersonId) || {}).name || '?'}`;
+// what this project has to achieve: only the selected activities count; "Received" is the only success for a shipment
+function projectTasks(pr){
+  const t = [];
+  if (hasAct(pr, 'shipment')){
+    if (!pr.shipments.length) t.push({label:'Shipment', done:false, detail:'no shipment added yet'});
+    for (const s of pr.shipments) t.push({label:'Shipment ' + shipRoute(s), done:s.status === 'Received', optional:s.required === false, detail:s.status === 'Sent' ? 'sent, receipt not confirmed' : s.status === 'Received' ? 'received' : 'not sent yet'});
+  }
+  if (hasAct(pr, 'preparation')){
+    // named people are prepared in the participant table, so a demand line is only needed without them
+    if (!pr.demand.length) t.push({label:'Equipment Preparation', done:pr.participants.length > 0, detail:pr.participants.length ? 'prepared per participant' : 'no demand line added yet'});
+    for (const l of pr.demand){ const c = demandCounts(pr, l); t.push({label:'Preparation: ' + typeLabel(l.typeId), done:c.selected >= l.qty, detail:`${c.selected} of ${l.qty} selected`}); }
+  }
+  if (hasAct(pr, 'assignment')){
+    const n = pr.participants.filter(x => partAssetIds(x).length).length;
+    t.push({label:'Asset Assignment', done:n > 0, detail:n ? `${n} participant(s) with assets` : 'no asset selected for any participant'});
+  }
+  if (hasAct(pr, 'replacement')){
+    const open = pr.replacements.filter(r => (repReturn(pr, r) || {}).state === 'awaiting').length;
+    t.push({label:'Replacement', done:pr.replacements.length > 0, detail:pr.replacements.length ? `${pr.replacements.length} replacement(s)${open ? `, ${open} old asset(s) still awaited (does not block)` : ''}` : 'no replacement added yet'});
+  }
+  return t;
+}
+const taskLine = t => `${t.done ? '✔' : t.optional ? '○' : '✕'} ${t.label}: ${t.detail}${t.optional ? ' (optional)' : ''}`;
+function taskCard(pr){
+  const list = projectTasks(pr);
+  return `<div class="card" id="prTasks" style="margin-bottom:12px"><b>${isActive(pr) ? 'Completion checklist' : 'Result'}</b>${pr.result === 'successful' ? ' <span class="pill ok">Successful</span>' : ''}
+    ${list.map(t => `<div class="ptask"><span style="color:var(--${t.done ? 'ok' : t.optional ? 'muted' : 'warn'})">${t.done ? '✔' : t.optional ? '○' : '✕'}</span> ${esc(t.label)} <small class="muted">${esc(t.detail)}${t.optional ? ' · optional' : ''}</small></div>`).join('')}</div>`;
+}
 const partAssetIds = x => [x.computerId, x.monitorId, x.monitor2Id, ...(x.otherIds || [])].filter(Boolean);
 // which active project has reserved this asset
 function reservedBy(assetId){
@@ -24,7 +55,7 @@ function reservedBy(assetId){
 function slotCandidates(kind, current){
   return sortHu(db.assets.filter(a => {
     if (a.id === current) return true;
-    if (a.status !== 'ok' || a.holder.kind !== 'storage' || reservedBy(a.id)) return false;
+    if (a.status !== 'ok' || !['storage', 'site'].includes(a.holder.kind) || reservedBy(a.id)) return false;
     return kind === 'other' ? a.type !== 'pc' && a.type !== 'monitor' : a.type === kind;
   }), a => modelName(a) + a.tag);
 }
@@ -37,6 +68,7 @@ function projectProgress(pr){
     done += CHECKLIST.filter(([k]) => x.checklist[k]).length;
   }
   for (const l of pr.demand){ const c = demandCounts(pr, l); total += l.qty; done += Math.min(l.qty, c.selected); }
+  for (const s of pr.shipments) if (s.required !== false){ total++; if (s.status === 'Received') done++; }
   return total ? Math.round(done / total * 100) : 0;
 }
 const projectAssetIds = pr => [...pr.participants.flatMap(partAssetIds), ...pr.demand.flatMap(l => l.assetIds), ...pr.replacements.map(r => r.newId).filter(Boolean)];
@@ -62,10 +94,10 @@ function viewProjects(params){
       <select id="prst"><option value="">All statuses</option><option value="active"${st === 'active' ? ' selected' : ''}>Active (not closed)</option>
         ${Object.entries(PROJECT_STATUS).map(([k, v]) => `<option value="${k}"${k === st ? ' selected' : ''}>${v}</option>`).join('')}</select>
     </div>
-    ${list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Project name</th><th>Participants / demand</th><th>Pickup / deadline</th><th>Owner</th><th>Ticket</th><th>Status</th><th>Preparation</th><th>Note</th></tr></thead><tbody>${list.map(pr => {
+    ${list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Project name</th><th>Activities</th><th>Participants / demand</th><th>Pickup / deadline</th><th>Owner</th><th>Ticket</th><th>Status</th><th>Preparation</th><th>Note</th></tr></thead><tbody>${list.map(pr => {
       const pct = projectProgress(pr);
-      return `<tr><td><a href="#/project/${pr.id}"><b>${esc(pr.name)}</b></a></td>
-        <td>${pr.participants.map(x => esc((person(x.personId) || {}).name || '?')).join(', ') || (pr.demand.length ? `<span class="muted">${esc(demandText(pr))}</span>` : '<span class="muted">–</span>')}</td>
+      return `<tr><td><a href="#/project/${pr.id}"><b>${esc(pr.name)}</b></a></td><td>${actPills(pr)}</td>
+        <td>${pr.participants.map(x => esc((person(x.personId) || {}).name || '?')).join(', ') || (pr.demand.length ? `<span class="muted">${esc(demandText(pr))}</span>` : pr.shipments.length ? `<span class="muted">${esc(pr.shipments.map(shipRoute).join(', '))}</span>` : '<span class="muted">–</span>')}</td>
         <td style="white-space:nowrap">${fmtDate(pr.pickupDate)}</td><td>${esc(pr.owner) || '<span class="muted">–</span>'}</td>
         <td class="tag">${esc(pr.ticket) || '<span class="muted">–</span>'}</td><td>${projectStatusPill(pr.status)}</td>
         <td><div class="progress" title="${pct}%"><i style="width:${pct}%"></i></div><small class="muted">${pct}%</small></td>
@@ -82,38 +114,65 @@ function bindProjects(){
 }
 function projectForm(pr){
   const isNew = !pr;
-  pr = pr || {name:'', owner:currentUser(), pickupDate:'', ticket:'', note:'', status:'planning', targetServiceId:null, targetRoomId:null, accessories:''};
+  pr = pr || {name:'', owner:currentUser(), pickupDate:'', ticket:'', note:'', status:'planning', targetServiceId:null, targetRoomId:null, accessories:'', activities:[]};
+  const tmp = {participants:[], demand:[], replacements:[]};
+  // a block is shown only when one of the activities in data-act is selected
+  const block = (acts, html) => `<div data-act="${acts}">${html}</div>`;
   openDialog(`
     <h3>${isNew ? 'New project' : 'Project details'}</h3>
-    <label class="f">Project name</label><input name="name" required value="${esc(pr.name)}" placeholder="e.g. Customer Support – December joiners">
+    <label class="f">Project name</label><input name="name" required value="${esc(pr.name)}" placeholder="e.g. Debrecen to Budapest – 5 computers">
+    <label class="f">Included Activities *</label>
+    <div class="grid" id="prActs" style="grid-template-columns:repeat(2,1fr);gap:0 8px">${Object.entries(ACTIVITIES).map(([k, l]) => `<label class="cb" style="margin:4px 0"><input type="checkbox" name="act_${k}" data-actk="${k}"${pr.activities.includes(k) ? ' checked' : ''}> ${l}</label>`).join('')}</div>
     <div class="two">
       <div><label class="f">Project owner</label><input name="owner" list="ownerList" value="${esc(pr.owner)}"><datalist id="ownerList">${sortHu(db.people, p => p.name).map(p => `<option value="${esc(p.name)}">`).join('')}</datalist></div>
-      <div><label class="f">Planned pickup date / deadline</label><input type="date" name="pickupDate" value="${esc(pr.pickupDate)}"></div>
       <div><label class="f">Ticket ID</label><input name="ticket" value="${esc(pr.ticket)}" placeholder="e.g. INC-20417"></div>
       <div><label class="f">Project status</label><select name="status">${Object.entries(PROJECT_STATUS).filter(([k]) => k !== 'completed').map(([k, v]) => `<option value="${k}"${k === pr.status ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
-      <div><label class="f">Target Service</label><select name="targetServiceId">${selOpts(sortHu(db.services, s => s.name), pr.targetServiceId, s => s.name, '–')}</select></div>
-      <div><label class="f">Target location</label><select name="targetRoomId">${selOpts(sortHu(db.rooms, r => r.name), pr.targetRoomId, r => r.name, '–')}</select></div>
+      ${block('preparation assignment replacement', `<label class="f">Planned pickup date / deadline</label><input type="date" name="pickupDate" value="${esc(pr.pickupDate)}" style="width:100%">`)}
     </div>
-    <label class="f">Planned accessories</label><input name="accessories" value="${esc(pr.accessories)}" placeholder="e.g. headset, monitor, dock">
+    ${block('preparation', `<div class="two">
+      <div><label class="f">Target Service</label><select name="targetServiceId">${selOpts(sortHu(db.services, s => s.name), pr.targetServiceId, s => s.name, '–')}</select></div>
+      <div><label class="f">Target location</label><select name="targetRoomId">${selOpts(sortHu(db.rooms, r => r.name), pr.targetRoomId, r => r.name, '–')}</select></div></div>
+      <label class="f">Planned accessories</label><input name="accessories" value="${esc(pr.accessories)}" placeholder="e.g. headset, monitor, dock">`)}
+    ${isNew ? block('shipment', `<h3 style="margin-top:14px;font-size:14px">📦 Shipment</h3>${shipFields()}`) : ''}
     <label class="f">Note</label><textarea name="note" style="width:100%">${esc(pr.note)}</textarea>
-    <p class="muted" style="font-size:12px">People are optional: add participants now, or record the demand first and link the people later.</p>
+    ${block('assignment', '<p class="muted" style="font-size:12px">Add the participants on the project page.</p>')}
+    ${block('preparation', '<p class="muted" style="font-size:12px">Add the planned quantities on the project page. People can be linked later.</p>')}
+    ${block('replacement', '<p class="muted" style="font-size:12px">Add the old and replacement assets on the project page.</p>')}
     ${dlgActions(isNew ? 'Create' : 'Save')}`,
     data => {
+      const activities = Object.keys(ACTIVITIES).filter(k => data['act_' + k]);
+      if (!activities.length){ alert('Select at least one activity.'); return false; }
       const v = {name:data.name.trim(), owner:data.owner.trim(), pickupDate:data.pickupDate, ticket:data.ticket.trim(), note:data.note.trim(), status:data.status,
-        targetServiceId:data.targetServiceId || null, targetRoomId:data.targetRoomId || null, accessories:data.accessories.trim()};
+        targetServiceId:data.targetServiceId || null, targetRoomId:data.targetRoomId || null, accessories:data.accessories.trim(), activities};
       if (isNew){
         const n = {id:uid(), ...v, created:Date.now(), completedAt:null, participants:[], demand:[], shipments:[], replacements:[]};
-        db.projects.push(n); plog(n.id, 'Project created: ' + n.name); save(); location.hash = '#/project/' + n.id; return;
+        let ship = null;
+        if (activities.includes('shipment') && (data.from || data.to || data.recvP || shipPicked(tmp, data).length)){ ship = readShipment(tmp, data); if (!ship) return false; }
+        db.projects.push(n); plog(n.id, `Project created: ${n.name} (${activities.map(a => ACTIVITIES[a]).join(', ')})`);
+        if (ship){ n.shipments.push(ship); plog(n.id, `Shipment created: ${shipRoute(ship)} – ${ship.assetIds.map(i => asset(i).tag).join(', ')}`); }
+        save(); location.hash = '#/project/' + n.id; return;
       }
+      // removing an activity keeps its records; the user is told before it happens
+      const removed = pr.activities.filter(a => !activities.includes(a)), used = {shipment:pr.shipments.length, preparation:pr.demand.length, assignment:pr.participants.length, replacement:pr.replacements.length};
+      const affected = removed.filter(a => used[a]);
+      if (affected.length && !confirm(`These activities have recorded data:\n\n${affected.map(a => `• ${ACTIVITIES[a]}: ${used[a]} record(s)`).join('\n')}\n\nThe records are kept and stay visible, but they no longer count when the project is completed, and their assets are not checked out. Continue?`)) return false;
       const lbl = {name:'Name', owner:'Owner', pickupDate:'Planned pickup', ticket:'Ticket', note:'Note', status:'Status', accessories:'Accessories'};
       const show = (k, x) => k === 'status' ? PROJECT_STATUS[x] : x;
       const ch = Object.keys(lbl).filter(k => (pr[k] || '') !== (v[k] || '')).map(k => `${lbl[k]}: ${show(k, pr[k]) || '–'} → ${show(k, v[k]) || '–'}`);
+      if (pr.activities.join() !== activities.join()) ch.push(`Activities: ${activities.map(a => ACTIVITIES[a]).join(', ')}`);
       // a new project-level date is passed on to participants that still had the old one
       if (pr.pickupDate !== v.pickupDate) for (const x of pr.participants) if (!x.pickupDate || x.pickupDate === pr.pickupDate) x.pickupDate = v.pickupDate;
       Object.assign(pr, v);
       if (ch.length) plog(pr.id, 'Project updated – ' + ch.join('; '));
       save(); render();
     });
+  const sync = () => {
+    const on = [...document.querySelectorAll('[data-actk]')].filter(c => c.checked).map(c => c.dataset.actk);
+    document.querySelectorAll('#dlgForm [data-act]').forEach(b => { b.hidden = !b.dataset.act.split(' ').some(a => on.includes(a)); });
+  };
+  document.querySelectorAll('[data-actk]').forEach(c => c.addEventListener('change', sync));
+  if (isNew) bindShipFields(tmp);
+  sync();
 }
 
 function slotCell(pr, x, f, slot, ro){
@@ -149,7 +208,7 @@ function replacementHtml(pr){
     const ret = repReturn(pr, r), old = asset(r.oldId), nw = r.newId && asset(r.newId), st = ret ? ret.state : 'notRequired';
     return `<tr><td>${personLink(r.personId)}</td><td>${old ? `${aidLink(old)}<br><small class="muted">${esc(assetName(old))}</small>` : '<span class="muted">deleted</span>'}</td>
       <td>${nw ? `${aidLink(nw)}<br><small class="muted">${esc(assetName(nw))}</small>` : '<span class="muted">–</span>'}</td>
-      <td><span class="pill ${{awaiting:'warn', returned:'ok'}[st] || ''}" data-rep-state="${r.id}">${RETURN_STATE[st]}</span>${ret && ret.closedAt ? `<br><small class="muted">${fmtTime(ret.closedAt)}</small>` : ''}</td>
+      <td><span class="pill ${ret ? returnCls(ret) : ''}" data-rep-state="${r.id}">${RETURN_STATE[st]}</span>${ret ? returnBadge(ret) : ''}${ret && ret.closedAt ? `<br><small class="muted">${fmtTime(ret.closedAt)}</small>` : ''}</td>
       <td style="text-align:right;white-space:nowrap">${st === 'awaiting' && old ? `<button class="sm primary" onclick="toStorage('${old.id}')">↩ Record return</button> <button class="sm" onclick="setRepState('${pr.id}','${r.id}','notRequired')">Not Required</button>` : ''}
         ${st === 'notRequired' && old ? `<button class="sm" onclick="setRepState('${pr.id}','${r.id}','awaiting')">Expect return</button>` : ''}</td></tr>`;
   }).join('');
@@ -157,13 +216,20 @@ function replacementHtml(pr){
     ${pr.replacements.length ? `<div class="tbl-wrap"><table><thead><tr><th>Recipient</th><th>Old asset</th><th>Replacement asset</th><th>Return</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
       <p class="muted" style="font-size:12px">“Returned” is set only by the real return. The project can be completed while an old asset is still on its way back.</p>` : '<div class="empty">No replacements in this project.</div>'}`;
 }
+const shipOffice = id => (office(id) || {}).name || '–';
 function shipmentHtml(pr, ro){
-  const rows = pr.shipments.map(s => `<tr><td>${esc(s.from) || '<span class="muted">–</span>'}</td><td>${s.toPersonId ? personLink(s.toPersonId) : esc((room(s.toRoomId) || {}).name || '–')}</td>
-    <td>${s.assetIds.map(asset).filter(Boolean).map(a => aidLink(a)).join(' ') || '<span class="muted">–</span>'}</td>
-    <td><select data-ship="${s.id}">${SHIP_STATUS.map(x => `<option${x === s.status ? ' selected' : ''}>${x}</option>`).join('')}</select></td>
-    <td><button class="sm danger" data-ship-rm="${s.id}">✕</button></td></tr>`).join('');
-  return `<div class="row"><h2>📦 Shipping</h2><span class="spacer"></span><button class="sm" onclick="shipmentDialog('${pr.id}')">+ Shipment</button></div>
-    ${pr.shipments.length ? `<div class="tbl-wrap"><table><thead><tr><th>From</th><th>To</th><th>Assets</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">Nothing recorded as sent.</div>'}`;
+  const rows = pr.shipments.map(s => {
+    const moving = s.fromOfficeId && s.toOfficeId;
+    return `<tr data-ship="${s.id}"><td>${esc(moving ? shipOffice(s.fromOfficeId) : s.from || '–')}</td><td>${esc(shipOffice(s.toOfficeId))}</td>
+      <td>${s.sendPersonId ? personLink(s.sendPersonId) : '<span class="muted">–</span>'}</td><td>${s.recvPersonId ? personLink(s.recvPersonId) : '<span class="muted">–</span>'}</td>
+      <td>${s.assetIds.map(asset).filter(Boolean).map(a => `${aidLink(a)} <small class="muted">${esc(assetName(a))}</small>`).join('<br>') || '<span class="muted">–</span>'}</td>
+      <td><span class="pill ${{Sent:'warn', Received:'ok'}[s.status] || ''}">${s.status === 'Sent' ? 'Sent, awaiting receipt' : s.status}</span>${s.required === false ? ' <span class="pill">Optional</span>' : ''}${s.receivedAt ? `<br><small class="muted">${fmtTime(s.receivedAt)}</small>` : ''}</td>
+      <td style="text-align:right;white-space:nowrap">
+        ${s.status === 'Preparing' ? `<button class="sm primary" onclick="shipAction('${pr.id}','${s.id}','send')">Mark as Sent</button> <button class="sm danger" onclick="removeShipment('${pr.id}','${s.id}')">✕</button>` : ''}
+        ${s.status === 'Sent' ? `<button class="sm primary" onclick="shipAction('${pr.id}','${s.id}','receive')">Record receipt</button> <button class="sm" onclick="shipAction('${pr.id}','${s.id}','cancel')">Cancel sending</button>` : ''}</td></tr>`;
+  }).join('');
+  return `<div class="row"><h2>📦 Shipments</h2><span class="spacer"></span><button class="sm" onclick="shipmentDialog('${pr.id}')">+ Shipment</button></div>
+    ${pr.shipments.length ? `<div class="tbl-wrap"><table><thead><tr><th>Sending Office</th><th>Receiving Office</th><th>Sending Person</th><th>Receiving Person</th><th>Shipment Items</th><th>Shipment Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No shipments in this project.</div>'}`;
 }
 function viewProject(id){
   const pr = project(id);
@@ -190,10 +256,11 @@ function viewProject(id){
     <div class="row"><a href="#/projects">← Projects</a></div>
     <div class="row" style="margin-top:8px"><h1>📋 ${esc(pr.name)}</h1> ${projectStatusPill(pr.status)}<span class="spacer"></span>
       ${ro ? '' : `<button onclick="projectForm(project('${pr.id}'))">✎ Project details</button>
-        <button onclick="addParticipantDialog('${pr.id}')">+ Participant</button>
+        ${hasAct(pr, 'assignment') || hasAct(pr, 'preparation') ? `<button onclick="addParticipantDialog('${pr.id}')">+ Participant</button>` : ''}
         <button class="primary" onclick="completeProject('${pr.id}')">✅ Complete project</button>`}
       <button class="danger" onclick="deleteProject('${pr.id}')">Delete</button></div>
     <div class="card" style="margin:12px 0"><dl class="kv">
+      <dt>Included Activities</dt><dd id="prActivities">${actPills(pr)}</dd>
       <dt>Project owner</dt><dd>${esc(pr.owner) || '–'}</dd>
       <dt>Pickup / deadline</dt><dd>${fmtDate(pr.pickupDate)}</dd>
       <dt>Ticket ID</dt><dd>${pr.ticket ? `<span class="tag">${esc(pr.ticket)}</span>${copyBtn(pr.ticket)}` : '–'}</dd>
@@ -204,16 +271,18 @@ function viewProject(id){
       <dt>Note</dt><dd style="white-space:pre-wrap">${esc(pr.note) || '–'}</dd>
       ${pr.completedAt ? `<dt>Completed</dt><dd>${fmtTime(pr.completedAt)}</dd>` : ''}
     </dl></div>
-    ${demandHtml(pr, ro)}
-    <h2>Participants and equipment (${pr.participants.length})</h2>
+    ${taskCard(pr)}
+    ${[...pr.activities.length ? [] : [], ...Object.keys(ACTIVITIES).filter(a => !hasAct(pr, a) && {shipment:pr.shipments.length, preparation:pr.demand.length, assignment:pr.participants.length, replacement:pr.replacements.length}[a])].map(a => `<div class="warnbox">${esc(ACTIVITIES[a])} is not selected for this project. Its records are kept below but do not count at completion.</div>`).join('')}
+    ${hasAct(pr, 'shipment') || pr.shipments.length ? shipmentHtml(pr, ro) : ''}
+    ${hasAct(pr, 'preparation') || pr.demand.length ? demandHtml(pr, ro) : ''}
+    ${hasAct(pr, 'assignment') || pr.participants.length ? `<h2>Participants and equipment (${pr.participants.length})</h2>
     <p class="muted" style="font-size:12px;margin-top:-4px">Inventory items (with Asset ID): Computer, Monitor, 2nd Monitor, other assets – reserved until completion.
       Checklist (no Asset ID, never inventory): ${CHECKLIST.map(([, l]) => l).join(', ')}.</p>
     ${pr.participants.length ? `<div class="tbl-wrap"><table class="ptable"><thead><tr><th>Service</th><th>Planned pickup date</th><th>Name of the Agent</th>
       <th>Computer</th><th>Monitor Serialnumber</th><th>2nd Monitor</th>${CHECKLIST.map(([, l]) => `<th class="cb">${l}</th>`).join('')}<th>Other assets</th>${ro ? '' : '<th></th>'}</tr></thead>
-      <tbody>${rows}</tbody></table></div>` : `<div class="empty">No participants yet. ${ro ? '' : `<button class="sm" onclick="addParticipantDialog('${pr.id}')">+ Participant</button>`}</div>`}
-    ${replacementHtml(pr)}
-    ${shipmentHtml(pr, ro)}
-    ${docs.length ? `<h2>📄 Project protocols</h2>${docTable(docs, true)}` : ''}
+      <tbody>${rows}</tbody></table></div>` : `<div class="empty">No participants yet. ${ro ? '' : `<button class="sm" onclick="addParticipantDialog('${pr.id}')">+ Participant</button>`}</div>`}` : ''}
+    ${hasAct(pr, 'replacement') || pr.replacements.length ? replacementHtml(pr) : ''}
+    ${docs.length ? `<h2>📄 Project documents</h2>${docTable(docs, true)}` : ''}
     <h2>Project log</h2>
     ${logTable(logs, {noSubject:true})}`;
 }
@@ -222,9 +291,6 @@ function bindProject(id){
   if (!pr) return;
   const view = $('#view');
   const on = (sel, ev, fn) => view.querySelectorAll(sel).forEach(el => el.addEventListener(ev, () => fn(el)));
-  // shipments stay editable after completion: a parcel can still be on its way
-  on('[data-ship]', 'change', el => { const s = pr.shipments.find(x => x.id === el.dataset.ship); plog(pr.id, `Shipment status: ${s.status} → ${el.value}`); s.status = el.value; save(); render(); });
-  on('[data-ship-rm]', 'click', el => { if (confirm('Remove this shipment record?')){ pr.shipments = pr.shipments.filter(x => x.id !== el.dataset.shipRm); plog(pr.id, 'Shipment record removed'); save(); render(); } });
   if (!isActive(pr)) return;
   const st = $('#prStatus');
   if (st) st.addEventListener('change', () => { plog(pr.id, `Project status: ${PROJECT_STATUS[pr.status]} → ${PROJECT_STATUS[st.value]}`); pr.status = st.value; save(); render(); });
@@ -313,13 +379,14 @@ function replacementDialog(prId){
   const heldBy = pid => personAssets(pid).direct.filter(a => !pr.replacements.some(r => r.oldId === a.id));
   const people = sortHu(db.people.filter(p => personAssets(p.id).direct.length), p => (pr.participants.some(x => x.personId === p.id) ? '0' : '1') + p.name);
   if (!people.length){ alert('Nobody holds an asset that could be replaced.'); return; }
-  const newOpts = sortHu(db.assets.filter(a => a.status === 'ok' && a.holder.kind === 'storage' && !reservedBy(a.id)), a => a.tag);
+  const newOpts = sortHu(db.assets.filter(a => a.status === 'ok' && ['storage', 'site'].includes(a.holder.kind) && !reservedBy(a.id)), a => a.tag);
   openDialog(`<h3>🔁 Replacement</h3>
     <label class="f">Recipient</label><select name="personId" id="repP">${selOpts(people, null, p => p.name)}</select>
     <label class="f">Old assets</label><div class="checklist" id="repOld"></div>
     <label class="f">Replacement asset (optional, reserved until completion)</label>
     ${picker('newId', `<option value="">– none –</option>` + newOpts.map(a => `<option value="${a.id}">${typeIcon(a.type)} ${esc(a.tag)} · ${esc(assetName(a))}</option>`).join(''), {size:5})}
-    <label class="f">Return of the old asset</label><select name="ret"><option value="awaiting">Awaiting Return</option><option value="notRequired">Not Required</option></select>
+    <div class="two"><div><label class="f">Return of the old asset</label><select name="ret"><option value="awaiting">Awaiting Return</option><option value="notRequired">Not Required</option></select></div>
+      <div><label class="f">Return deadline (optional)</label><input type="date" name="due"></div></div>
     ${dlgActions('Add')}`,
     data => {
       const olds = heldBy(data.personId).filter(a => data['old_' + a.id]);
@@ -327,7 +394,7 @@ function replacementDialog(prId){
       olds.forEach((old, i) => {
         const rep = {id:uid(), personId:data.personId, oldId:old.id, newId:i === 0 ? data.newId || null : null, ts:Date.now()};
         pr.replacements.push(rep);
-        const r = openReturn(old.id, data.personId, 'project', {projectId:pr.id});
+        const r = openReturn(old.id, data.personId, 'project', {projectId:pr.id, due:data.due});
         if (data.ret === 'notRequired') setReturnState(r, 'notRequired');
         plog(pr.id, `Replacement added – ${(person(data.personId) || {}).name}: ${old.tag}${rep.newId ? ' → ' + asset(rep.newId).tag : ''} (${RETURN_STATE[data.ret]})`);
       });
@@ -340,49 +407,107 @@ function setRepState(prId, repId, state){
   const pr = project(prId), rep = pr.replacements.find(r => r.id === repId), r = repReturn(pr, rep);
   if (r){ setReturnState(r, state); plog(pr.id, `Return of ${(asset(rep.oldId) || {}).tag || '?'}: ${RETURN_STATE[state]}`); save(); render(); }
 }
+// assets in an open shipment cannot be picked for another one
+const inOpenShipment = id => db.projects.some(pr => pr.shipments.some(s => s.status !== 'Received' && s.assetIds.includes(id)));
+function shipCandidates(pr, fromId){
+  const own = new Set(projectAssetIds(pr));
+  return sortHu(db.assets.filter(a => !inOpenShipment(a.id) && a.holder.kind !== 'transit' && !isOut(a) &&
+    (fromId ? a.holder.kind === 'storage' || assetOfficeId(a) === fromId : own.has(a.id))), a => (own.has(a.id) ? '0' : '1') + a.tag).map(a => [a, own.has(a.id)]);
+}
+function shipFields(){
+  const offs = sortHu(db.offices, o => o.name), ppl = sortHu(db.people, p => p.name);
+  const opts = `<option value="">– none –</option>` + offs.map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('');
+  const pOpts = `<option value="">– none –</option>` + ppl.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  return `<div class="two">
+    <div><label class="f">Sending Office</label><select name="from" id="shFrom">${opts}</select></div>
+    <div><label class="f">Receiving Office</label><select name="to">${opts}</select></div>
+    <div><label class="f">Sending Person</label><select name="sendP">${pOpts}</select></div>
+    <div><label class="f">Receiving Person</label><select name="recvP">${pOpts}</select></div></div>
+    <label class="f">Shipment Items</label><div class="checklist" id="shItems"></div>
+    <label class="cb"><input type="checkbox" name="shReq" checked> Required for completing the project</label>
+    <p class="muted" style="font-size:12px">Assets only change place when the shipment is marked as sent and received. A person-only shipment is recorded without moving anything.</p>`;
+}
+const shipPicked = (pr, data) => shipCandidates(pr, data.from).map(x => x[0]).filter(a => data['a_' + a.id]).map(a => a.id);
+// returns the new shipment, or null after telling the user what is missing
+function readShipment(pr, data){
+  const assetIds = shipPicked(pr, data);
+  if (!assetIds.length){ alert('Choose at least one asset.'); return null; }
+  if (data.from && data.from === data.to){ alert('The Sending and Receiving Office must be different.'); return null; }
+  if (!data.to && !data.recvP){ alert('Choose a Receiving Office or a Receiving Person.'); return null; }
+  if (data.from && !data.to){ alert('Choose the Receiving Office.'); return null; }
+  if (data.to && !data.from){ alert('Choose the Sending Office.'); return null; }
+  if (data.from && assetIds.some(i => asset(i).holder.kind === 'person')){ alert('Assets assigned to a person cannot be sent between offices. Return them first.'); return null; }
+  return {id:uid(), from:'', fromOfficeId:data.from || null, toOfficeId:data.to || null, sendPersonId:data.sendP || null, recvPersonId:data.recvP || null, toPersonId:data.recvP || null, toRoomId:null, assetIds, status:'Preparing', required:!!data.shReq, origin:{}, ts:Date.now()};
+}
+function bindShipFields(pr){
+  const fill = () => {
+    const c = shipCandidates(pr, $('#shFrom').value);
+    $('#shItems').innerHTML = c.map(([a, own]) => `<label><input type="checkbox" name="a_${a.id}"> <b class="tag">${esc(a.tag)}</b> ${esc(assetName(a))} <small class="muted">${own ? '📋 ' : ''}${esc(whereText(a))}</small></label>`).join('') || '<span class="muted">No assets available. Choose a Sending Office or select project assets first.</span>';
+  };
+  $('#shFrom').addEventListener('change', fill); fill();
+}
 function shipmentDialog(prId){
-  const pr = project(prId), ids = [...new Set(projectAssetIds(pr))], list = ids.map(asset).filter(Boolean);
-  if (!list.length){ alert('Select the project assets first.'); return; }
-  openDialog(`<h3>📦 Shipment</h3>
-    <label class="f">From (place or person)</label><input name="from" value="${esc(db.settings.handler)}">
-    <label class="f">To</label><select name="to"><optgroup label="Person">${sortHu(db.people, p => p.name).map(p => `<option value="person:${p.id}">👤 ${esc(p.name)}</option>`).join('')}</optgroup>
-      <optgroup label="Location">${sortHu(db.rooms, r => r.name).map(r => `<option value="room:${r.id}">🏢 ${esc(r.name)}</option>`).join('')}</optgroup></select>
-    <label class="f">Assets</label><div class="checklist">${list.map(a => `<label><input type="checkbox" name="a_${a.id}"> <b class="tag">${esc(a.tag)}</b> ${esc(assetName(a))}</label>`).join('')}</div>
-    <label class="f">Status</label><select name="status">${SHIP_STATUS.map(s => `<option>${s}</option>`).join('')}</select>
-    ${dlgActions('Add')}`,
+  const pr = project(prId);
+  openDialog(`<h3>📦 Shipment</h3>${shipFields()}${dlgActions('Add')}`,
     data => {
-      const assetIds = list.filter(a => data['a_' + a.id]).map(a => a.id);
-      if (!assetIds.length){ alert('Choose at least one asset.'); return false; }
-      const [k, tid] = data.to.split(':');
-      pr.shipments.push({id:uid(), from:data.from.trim(), toPersonId:k === 'person' ? tid : null, toRoomId:k === 'room' ? tid : null, assetIds, status:data.status, ts:Date.now()});
-      plog(pr.id, `Shipment recorded to ${k === 'person' ? (person(tid) || {}).name : (room(tid) || {}).name}: ${assetIds.map(i => asset(i).tag).join(', ')} (${data.status})`);
+      const s = readShipment(pr, data);
+      if (!s) return false;
+      pr.shipments.push(s);
+      plog(pr.id, `Shipment created: ${shipRoute(s)} – ${s.assetIds.map(i => asset(i).tag).join(', ')}`);
       save(); render();
     });
+  bindShipFields(pr);
+}
+function removeShipment(prId, sid){
+  const pr = project(prId);
+  if (!confirm('Remove this shipment record?')) return;
+  pr.shipments = pr.shipments.filter(x => x.id !== sid); plog(pr.id, 'Shipment record removed'); save(); render();
+}
+// sending and receiving are separate steps: in between the asset is at neither office
+function shipAction(prId, sid, act){
+  const pr = project(prId), s = pr.shipments.find(x => x.id === sid), moving = s.fromOfficeId && s.toOfficeId, list = s.assetIds.map(asset).filter(Boolean);
+  const label = moving ? `${shipOffice(s.fromOfficeId)} → ${shipOffice(s.toOfficeId)}` : `to ${(person(s.recvPersonId) || {}).name || '?'}`;
+  if (act === 'send'){
+    if (moving){
+      const bad = list.filter(a => a.holder.kind === 'person' || a.holder.kind === 'transit');
+      if (bad.length){ alert(`Cannot send: ${bad.map(a => `${a.tag} (${whereText(a)})`).join(', ')}`); return; }
+      for (const a of list){ s.origin[a.id] = a.holder; setHolder(a, {kind:'transit', id:s.id}, {projectId:pr.id}); }
+    }
+    s.status = 'Sent'; plog(pr.id, `Shipment sent: ${label}`);
+  } else if (act === 'receive'){
+    if (!confirm(`Record the receipt of ${list.length} asset(s)${moving ? ' at ' + shipOffice(s.toOfficeId) : ''}?`)) return;
+    if (moving) for (const a of list) if (a.holder.kind === 'transit' && a.holder.id === s.id) setHolder(a, {kind:'site', id:s.toOfficeId}, {projectId:pr.id});
+    s.status = 'Received'; s.receivedAt = Date.now(); plog(pr.id, `Shipment received: ${label}`);
+  } else if (act === 'cancel'){
+    if (!confirm('Cancel the sending? The assets go back to where they were.')) return;
+    for (const a of list) if (a.holder.kind === 'transit' && a.holder.id === s.id) setHolder(a, s.origin[a.id] || {kind:'storage'}, {projectId:pr.id});
+    s.status = 'Preparing'; s.origin = {}; plog(pr.id, `Shipment sending cancelled: ${label}`);
+  }
+  save(); render();
 }
 function deleteProject(id){
   const pr = project(id);
-  if (!confirm(`Delete project “${pr.name}”?${isActive(pr) ? '\nReserved assets are released, nothing is checked out.' : '\nChecked-out assets and protocols stay.'}`)) return;
+  if (pr.shipments.some(s => s.status === 'Sent')){ alert('A shipment of this project is on its way. Record the receipt or cancel the sending first.'); return; }
+  if (!confirm(`Delete project “${pr.name}”?${isActive(pr) ? '\nReserved assets are released, nothing is checked out.' : '\nChecked-out assets and documents stay.'}`)) return;
   plog(pr.id, 'Project deleted: ' + pr.name);
   db.projects = db.projects.filter(x => x.id !== id); save(); location.hash = '#/projects';
 }
-// everything that would stop a clean completion
+// everything that would stop a clean completion; only the selected activities are looked at
 function projectProblems(pr){
-  const out = [], seen = new Map();
-  const repNew = pr.replacements.filter(r => r.newId);
-  if (!pr.participants.length && !repNew.length) out.push('No participants yet. Link the people before completing.');
-  else if (!pr.participants.some(x => partAssetIds(x).length) && !repNew.length) out.push('No inventory item (computer / monitor / other asset) is selected for any participant.');
-  for (const l of pr.demand) if (l.assetIds.length) out.push(`${l.assetIds.length} selected ${typeLabel(l.typeId)} asset(s) are not linked to a person yet.`);
+  const out = projectTasks(pr).filter(t => !t.done && !t.optional).map(t => `${t.label}: ${t.detail}.`), seen = new Map();
+  const assign = hasAct(pr, 'assignment'), repNew = hasAct(pr, 'replacement') ? pr.replacements.filter(r => r.newId) : [];
+  if (assign) for (const l of pr.demand) if (l.assetIds.length) out.push(`${l.assetIds.length} selected ${typeLabel(l.typeId)} asset(s) are not linked to a person yet.`);
   const check = (aid, pid, who) => {
     const a = asset(aid);
     if (!a){ out.push(`${who}: a selected asset no longer exists.`); return; }
     if (seen.has(aid)) out.push(`${a.tag} is selected for two people (${seen.get(aid)}, ${who}).`);
     seen.set(aid, who);
     if (a.status !== 'ok') out.push(`${a.tag} (${who}) status: ${STATUS[a.status].label}.`);
-    if (a.holder.kind !== 'storage' && !(a.holder.kind === 'person' && a.holder.id === pid)) out.push(`${a.tag} (${who}) is no longer in stock: ${whereText(a)}.`);
+    if (!['storage', 'site'].includes(a.holder.kind) && !(a.holder.kind === 'person' && a.holder.id === pid)) out.push(`${a.tag} (${who}) is not available: ${whereText(a)}.`);
     const r = reservedBy(aid);
     if (r && r.project.id !== pr.id) out.push(`${a.tag} (${who}) is also reserved for another project: ${r.project.name}.`);
   };
-  for (const x of pr.participants){
+  if (assign) for (const x of pr.participants){
     const p = person(x.personId), who = p ? p.name : 'deleted person';
     if (!p){ out.push('A participant no longer exists.'); continue; }
     if (p.status === 'Leaver' && partAssetIds(x).length) out.push(`${p.name} is a Leaver and cannot receive assets.`);
@@ -392,17 +517,17 @@ function projectProblems(pr){
   return out;
 }
 function completeProject(id){
-  const pr = project(id);
-  if (!confirm('Are you sure you want to complete the project and finalize the asset checkouts?')) return;
-  const problems = projectProblems(pr);
+  const pr = project(id), problems = projectProblems(pr);
   if (problems.length){
     plog(pr.id, `Completion stopped – ${problems.length} problem(s): ${problems.join(' ')}`); save(); render();
     alert('The project cannot be completed:\n\n• ' + problems.join('\n• ') + '\n\nFix these and try again.');
     return;
   }
   const byPerson = new Map();
-  for (const x of pr.participants) if (partAssetIds(x).length) byPerson.set(x.personId, {ids:partAssetIds(x), x});
-  for (const r of pr.replacements) if (r.newId){ const e = byPerson.get(r.personId) || {ids:[], x:null}; e.ids.push(r.newId); byPerson.set(r.personId, e); }
+  if (hasAct(pr, 'assignment')) for (const x of pr.participants) if (partAssetIds(x).length) byPerson.set(x.personId, {ids:partAssetIds(x), x});
+  if (hasAct(pr, 'replacement')) for (const r of pr.replacements) if (r.newId){ const e = byPerson.get(r.personId) || {ids:[], x:null}; e.ids.push(r.newId); byPerson.set(r.personId, e); }
+  const lines = projectTasks(pr).map(taskLine).join('\n');
+  if (!confirm(`${byPerson.size ? 'Are you sure you want to complete the project and finalize the asset checkouts?' : 'Are you sure you want to complete the project?'}\n\n${lines}`)) return;
   let issued = 0;
   const docs = [];
   pr.issuedIds ||= [];
@@ -413,8 +538,8 @@ function completeProject(id){
     docs.push(createDoc(pid, 'out', ids, {date:todayIso(), handler:db.settings.handler, projectId:pr.id,
       note:`Project: ${pr.name}${pr.ticket ? ' (' + pr.ticket + ')' : ''}` + (acc.length ? `\nHanded-over accessories (not inventory): ${acc.join(', ')}` : '')}));
   }
-  pr.status = 'completed'; pr.completedAt = Date.now();
-  plog(pr.id, `Project completed: ${pr.name} – ${issued} asset(s) checked out, ${docs.length} handover protocol(s) (${docs.map(d => d.no).join(', ')})`);
+  pr.status = 'completed'; pr.result = 'successful'; pr.completedAt = Date.now();
+  plog(pr.id, `Project completed successfully: ${pr.name} – ${issued} asset(s) checked out, ${docs.length} document(s)${docs.length ? ' (' + docs.map(d => d.no).join(', ') + ')' : ''}`);
   save(); render();
-  toast(`✅ Project completed: ${issued} asset(s) checked out, ${docs.length} protocol(s) – print them below.`);
+  toast(`✅ Project completed${docs.length ? `: ${issued} asset(s) checked out, ${docs.length} document(s)` : ''}.`);
 }

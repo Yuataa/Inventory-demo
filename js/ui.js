@@ -69,7 +69,7 @@ function askConfirm(title, html, ok = 'Confirm'){
 // ---------- searchable picker: a filter box above a list, with optional Service / Work Mode / Office filters ----------
 const holderFilters = () => `<select class="pick-f" data-k="svc" title="Service"><option value="">All Services</option>${sortHu(db.services, s => s.name).map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
   <select class="pick-f" data-k="mode" title="Work Mode"><option value="">All Work Modes</option>${db.modes.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select>
-  <select class="pick-f" data-k="room" title="Office"><option value="">All Offices</option>${sortHu(db.rooms, r => r.name).map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>`;
+  <select class="pick-f" data-k="office" title="Office"><option value="">All Offices</option>${sortHu(db.offices, o => o.name).map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select>`;
 const picker = (name, optionsHtml, o = {}) => `<div class="picker">${o.filters ? `<div class="pick-row">${holderFilters()}</div>` : ''}<input type="search" class="pick-q" placeholder="Search the list…">
   <select class="pick-list" name="${name}"${o.id ? ` id="${o.id}"` : ''} size="${o.size || 7}"${o.required ? ' required' : ''}>${optionsHtml}</select></div>`;
 function applyPicker(wrap){
@@ -88,15 +88,16 @@ function holderOptions(current, o = {}){
   let h = o.noStorage ? '' : `<option value="storage"${sel('storage')}>📦 In Stock</option>`;
   h += '<optgroup label="Assign to a person">' + sortHu(db.people, p => p.name).map(p =>
     `<option value="person:${p.id}" data-svc="${p.serviceId || ''}" data-mode="${esc(p.mode)}"${sel('person:' + p.id)}>👤 ${esc(p.name)} – ${esc(serviceName(p.serviceId) || 'no Service')} · ${esc(modeName(p.mode))}${p.status !== 'Active' ? ' · ' + p.status : ''}</option>`).join('') + '</optgroup>';
-  const offices = sortHu(db.rooms, r => r.name);
-  if (offices.length) h += '<optgroup label="Office pool (not on a desk)">' + offices.map(r =>
-    `<option value="office:${r.id}" data-room="${r.id}"${sel('office:' + r.id)}>🏢 ${esc(r.name)}</option>`).join('') + '</optgroup>';
+  const offices = sortHu(db.rooms, r => roomPath(r));
+  h += '<optgroup label="Office, not placed yet">' + sortHu(db.offices, o => o.name).map(o => `<option value="site:${o.id}" data-office="${o.id}"${sel('site:' + o.id)}>🏢 ${esc(o.name)}</option>`).join('') + '</optgroup>';
+  if (offices.length) h += '<optgroup label="Room pool (not on a desk)">' + offices.map(r =>
+    `<option value="office:${r.id}" data-office="${r.officeId}"${sel('office:' + r.id)}>🏢 ${esc(roomPath(r))}</option>`).join('') + '</optgroup>';
   for (const r of offices){
     const ks = sortHu(db.desks.filter(k => k.roomId === r.id), k => k.label);
     if (!ks.length) continue;
-    h += `<optgroup label="${esc(r.name)} – desks">` + ks.map(k => {
+    h += `<optgroup label="${esc(roomPath(r))} – desks">` + ks.map(k => {
       const ow = deskOwnerText(k);
-      return `<option value="desk:${k.id}" data-room="${r.id}"${sel('desk:' + k.id)}>${furnIcon(k)} ${esc(k.label)}${ow ? ' – ' + esc(ow) : ''}</option>`;
+      return `<option value="desk:${k.id}" data-office="${r.officeId}"${sel('desk:' + k.id)}>${furnIcon(k)} ${esc(k.label)}${ow ? ' – ' + esc(ow) : ''}</option>`;
     }).join('') + '</optgroup>';
   }
   return h;
@@ -125,6 +126,40 @@ function download(name, text, type){
 }
 const stamp = () => new Date().toISOString().slice(0, 10);
 const csvLine = r => r.map(v => '"' + String(v ?? '').replace(/"/g, '""') + '"').join(';');
+
+// ---------- table sorting: click = sort, click again = reverse, third click = off, Shift+click = add a further column ----------
+const sortState = {};
+const sortTables = () => [...document.querySelectorAll('#view .tbl-wrap:not(.nosort) table')].filter(t => t.tHead && t.tBodies[0] && !t.classList.contains('ptable') && !t.classList.contains('fields') && t.id !== 'dashCfg');
+const cellVal = td => td ? td.dataset.v ?? td.innerText.trim() : '';
+function applySorts(){
+  sortTables().forEach((t, ti) => {
+    const key = lastRoute.split('/')[0] + '#' + ti, list = sortState[key] || [], ths = [...t.tHead.rows[0].cells];
+    ths.forEach((th, i) => {
+      if (!th.innerText.trim()) return;
+      th.classList.add('sortable'); th.dataset.sk = key; th.dataset.si = i;
+      th.title = 'Click to sort · Shift+click to add a further sort column';
+      const p = list.findIndex(s => s.i === i);
+      th.querySelector('.sa')?.remove();
+      if (p >= 0) th.insertAdjacentHTML('beforeend', `<span class="sa">${list[p].dir > 0 ? '▲' : '▼'}${list.length > 1 ? p + 1 : ''}</span>`);
+    });
+    if (!list.length) return;
+    const rows = [...t.tBodies[0].rows];
+    if (rows.length < 2) return;
+    rows.map((r, n) => [r, n]).sort(([a, x], [b, y]) => {
+      for (const s of list){ const c = cellVal(a.cells[s.i]).localeCompare(cellVal(b.cells[s.i]), 'en', {numeric:true, sensitivity:'base'}); if (c) return c * s.dir; }
+      return x - y;
+    }).forEach(([r]) => t.tBodies[0].appendChild(r));
+  });
+}
+document.addEventListener('click', e => {
+  const th = e.target.closest('th[data-sk]'); if (!th || e.target.closest('input,button,a')) return;
+  const key = th.dataset.sk, i = +th.dataset.si, list = sortState[key] ||= [], cur = list.find(s => s.i === i);
+  if (e.shiftKey){ if (!cur) list.push({i, dir:1}); else if (cur.dir > 0) cur.dir = -1; else list.splice(list.indexOf(cur), 1); }
+  else if (!cur || list.length > 1) sortState[key] = [{i, dir:cur ? -cur.dir : 1}];
+  else if (cur.dir > 0) cur.dir = -1;
+  else sortState[key] = [];
+  render();
+});
 
 // ---------- bulk selection (asset list and person page) ----------
 const selected = new Set();
@@ -158,13 +193,13 @@ function assetRows(list, opts = {}){
       return `<tr${selected.has(a.id) ? ' class="picked"' : ''}>
       ${opts.select ? `<td class="sel"><input type="checkbox" class="selbox" data-id="${a.id}"${selected.has(a.id) ? ' checked' : ''}></td>` : ''}
       <td style="width:40px">${assetIcon(a)}</td>
-      <td>${aidLink(a)}${copyBtn(a.tag)}${res ? `<br><a class="pill acc" href="#/project/${res.project.id}" title="Reserved for a project">📋 ${esc(res.project.name)}</a>` : ''}${ret ? '<br><span class="pill warn">↩ Awaiting Return</span>' : ''}</td>
-      <td>${esc(assetName(a))}</td>
+      <td>${aidLink(a)}${copyBtn(a.tag)}${res ? `<br><a class="pill acc" href="#/project/${res.project.id}" title="Reserved for a project">📋 ${esc(res.project.name)}</a>` : ''}${ret ? `<br><span class="pill ${returnCls(ret)}" title="${esc(returnDue(ret) ? 'Due ' + returnDue(ret) : 'No deadline set')}">↩ Awaiting Return</span>` : ''}</td>
+      <td><a href="#/asset/${a.id}">${esc(assetName(a))}</a></td>
       <td>${typeLink(a)}</td>
       <td>${modelLink(a)}</td>
-      <td class="muted">${esc(a.serial)}</td>
+      <td class="muted" style="white-space:nowrap" data-v="${esc(a.serial)}">${esc(a.serial)}${a.serial ? copyBtn(a.serial) : ''}</td>
       <td>${statusPill(a.status)}${isAged(a) ? ' <span class="pill warn">Aged</span>' : ''}</td>
-      <td>${warrantyPill(a)}</td>
+      <td data-v="${esc(a.warrantyUntil || '')}">${warrantyPill(a)}</td>
       ${opts.noLoc ? '' : `<td>${whereLink(a)}</td>`}
       ${opts.actions ? `<td style="text-align:right;white-space:nowrap">${opts.actions(a)}</td>` : ''}
     </tr>`;
@@ -180,7 +215,7 @@ function logSubject(l){
 function logTable(entries, o = {}){
   if (!entries.length) return `<div class="empty">No entries.</div>`;
   return `<div class="tbl-wrap"><table><thead><tr><th>Time</th><th>Type</th>${o.noSubject ? '' : '<th>Subject</th>'}<th>Event</th><th>By</th></tr></thead><tbody>${entries.map(l =>
-    `<tr><td class="muted" style="white-space:nowrap">${fmtTime(l.ts)}</td><td><span class="pill ${CAT_PILL[l.cat] || ''}">${LOG_CATS[l.cat] || l.cat}</span></td>
+    `<tr><td class="muted" style="white-space:nowrap" data-v="${l.ts}">${fmtTime(l.ts)}</td><td><span class="pill ${CAT_PILL[l.cat] || ''}">${LOG_CATS[l.cat] || l.cat}</span></td>
      ${o.noSubject ? '' : `<td>${logSubject(l)}</td>`}<td>${esc(l.text)}</td><td class="muted">${esc(l.by || '–')}</td></tr>`).join('')}</tbody></table></div>`;
 }
 // "Project activity" covers every entry linked to a project (checkouts done by a project completion too)
@@ -220,13 +255,16 @@ function search(q){
   }
   for (const k of db.desks){ const r = room(k.roomId); if (norm([k.label, k.port, r ? r.name : '', k.sharedNote].join(' ')).includes(n))
     out.push({grp:'Desks', href:`#/room/${k.roomId}/${k.id}`, title:`${furnIcon(k)} ${k.label}${k.port ? ' · port ' + k.port : ''}`, sub:(r ? r.name : '') + (deskOwnerText(k) ? ' – ' + deskOwnerText(k) : '')}); }
+  for (const o of db.offices) if (norm(o.name + ' ' + (o.code || '')).includes(n))
+    out.push({grp:'Offices', href:'#/rooms?office=' + o.id, title:'🏢 ' + o.name, sub:`${officeRooms(o.id).length} rooms`});
   for (const pr of db.projects) if (norm([pr.name, pr.ticket, pr.owner].join(' ')).includes(n))
     out.push({grp:'Projects', href:'#/project/' + pr.id, title:'📋 ' + pr.name, sub:`${PROJECT_STATUS[pr.status]} · ${pr.ticket || 'no ticket'} · ${pr.participants.length} participants`});
   for (const s of db.services) if (norm(s.name).includes(n))
     out.push({grp:'Service', href:'#/people?service=' + s.id, title:'🧩 ' + s.name, sub:`${db.people.filter(p => p.serviceId === s.id).length} people`});
   for (const r of db.rooms) if (norm(r.name + ' ' + r.floor).includes(n))
-    out.push({grp:'Floorplan', href:'#/room/' + r.id, title:(ROOM_KINDS[r.kind] || '🏢').split(' ')[0] + ' ' + r.name, sub:r.floor});
-  return out.slice(0, 40);
+    out.push({grp:'Floorplan', href:'#/room/' + r.id, title:(ROOM_KINDS[r.kind] || '🏢').split(' ')[0] + ' ' + r.name, sub:roomPath(r) + ' · ' + r.floor});
+  const allowed = {People:'people', Assets:'assets', Desks:'floorplan', Offices:'floorplan', Floorplan:'floorplan', Projects:'projects', Service:'people'};
+  return out.filter(r => can(allowed[r.grp] + '.view')).slice(0, 40);
 }
 let resIdx = 0;
 function showResults(){

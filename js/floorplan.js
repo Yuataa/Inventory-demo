@@ -3,12 +3,21 @@
    While editing, changes stay in memory (fp.editing); Save stores them and Cancel reloads the saved state.
    The floorplan neither creates nor checks out assets: only office and Hybrid assets can be dragged onto a desk. */
 
-function viewRooms(){
+function curOffice(params){
+  const q = params && params.get('office');
+  if (q && office(q)) try { localStorage.setItem(OFFICE_KEY, q); } catch(e) {}
+  let id = q; if (!id) try { id = localStorage.getItem(OFFICE_KEY); } catch(e) {}
+  return office(id) || sortHu(db.offices, o => o.name)[0];
+}
+function viewRooms(params){
+  const o = curOffice(params), rooms = sortHu(officeRooms(o.id), r => r.name), pool = sortHu(sitePool(o.id), a => a.tag);
   return `
     <div class="row"><h1>Floorplan</h1><span class="spacer"></span><button class="primary" onclick="roomForm()">+ New room</button></div>
-    <div class="sub">Floor plans of offices, server rooms and storage rooms. Click a room to open it.</div>
-    ${db.rooms.length ? `<div class="grid room-cards">${sortHu(db.rooms, r => r.name).map(r => {
-      const os = roomObjs(r.id), ks = os.filter(o => o.kind === 'desk'), rk = os.filter(o => o.kind === 'rack');
+    <div class="officebar"><label class="muted">Office</label><select id="fpOffice">${sortHu(db.offices, x => x.name).map(x => `<option value="${x.id}"${x.id === o.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+      <button class="sm" onclick="officeForm()">+ New office</button><button class="sm" onclick="officeForm(office('${o.id}'))">✎ Edit office</button><button class="sm danger" onclick="deleteOffice('${o.id}')">Delete office</button>
+      <span class="muted">${rooms.length} rooms · ID ${esc(o.code || o.id)}</span></div>
+    ${rooms.length ? `<div class="grid room-cards">${rooms.map(r => {
+      const os = roomObjs(r.id), ks = os.filter(x => x.kind === 'desk'), rk = os.filter(x => x.kind === 'rack');
       const n = db.assets.filter(a => assetRoomId(a) === r.id).length;
       return `<div class="card" onclick="location.hash='#/room/${r.id}'">
         <b>${esc(r.name)}</b><div class="muted">${ROOM_KINDS[r.kind] || ''} · ${esc(r.floor)}</div>
@@ -16,7 +25,40 @@ function viewRooms(){
         <div class="muted" style="font-size:12px">🧩 ${r.serviceIds.map(serviceName).filter(Boolean).map(esc).join(', ') || 'no Service linked'}</div>
         <div class="mini-map">${os.map(k => `<div class="${k.kind}" style="left:${k.x / r.w * 100}%;top:${k.y / r.h * 100}%;width:${k.w / r.w * 100}%;height:${k.h / r.h * 100}%"></div>`).join('')}</div>
       </div>`;
-    }).join('')}</div>` : '<div class="empty">No rooms yet.</div>'}`;
+    }).join('')}</div>` : '<div class="empty">This office has no rooms yet.</div>'}
+    <h2>📦 At this office, not placed yet (${pool.length})</h2>
+    ${pool.length ? `<div class="card" id="sitePool">${pool.map(a => `<div class="siteitem">${assetIcon(a)} ${aidLink(a)} <span>${esc(assetName(a))}</span><span class="spacer"></span>
+      <select onchange="placeFromSite('${a.id}',this.value)"${can('floorplan.edit') ? '' : ' disabled'}><option value="">Move to room…</option>${rooms.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select></div>`).join('')}</div>`
+      : '<div class="empty">Received assets appear here until they are moved to a room.</div>'}`;
+}
+function bindRooms(){ $('#fpOffice').addEventListener('change', e => { location.hash = '#/rooms?office=' + e.target.value; }); }
+function placeFromSite(id, roomId){
+  const a = asset(id);
+  if (!roomId || a.holder.kind !== 'site' || (room(roomId) || {}).officeId !== a.holder.id) return;
+  setHolder(a, {kind:'office', id:roomId}); save(); render();
+}
+function officeForm(o){
+  const isNew = !o; o = o || {name:'', code:''};
+  openDialog(`<h3>${isNew ? 'New office' : 'Edit office'}</h3><div class="two"><div><label class="f">Office Name</label><input name="name" required value="${esc(o.name)}" placeholder="e.g. Debrecen Office"></div>
+    <div><label class="f">Office ID (unique)</label><input name="code" required value="${esc(o.code)}" placeholder="e.g. DEB"></div></div>${dlgActions(isNew ? 'Create' : 'Save')}`,
+    data => {
+      const name = data.name.trim(), code = data.code.trim().toUpperCase();
+      if (db.offices.some(x => x !== o && norm(x.name) === norm(name))){ alert('An office with this name already exists.'); return false; }
+      if (db.offices.some(x => x !== o && norm(x.code) === norm(code))){ alert('This Office ID is already used.'); return false; }
+      clog(`Office ${isNew ? 'created' : 'updated'}: ${name}`);
+      if (isNew){ const n = {id:uid(), name, code}; db.offices.push(n); save(); location.hash = '#/rooms?office=' + n.id; }
+      else { Object.assign(o, {name, code}); save(); render(); }
+    });
+}
+// an office only goes when nothing depends on it, so no room, asset or shipment is lost silently
+function deleteOffice(id){
+  const o = office(id), rooms = officeRooms(id), site = sitePool(id);
+  const ships = db.projects.flatMap(pr => pr.shipments).filter(s => (s.fromOfficeId === id || s.toOfficeId === id) && s.status !== 'Received');
+  const why = [rooms.length && `${rooms.length} room(s)`, site.length && `${site.length} unplaced asset(s)`, ships.length && `${ships.length} active shipment(s)`].filter(Boolean);
+  if (db.offices.length < 2){ alert('The last office cannot be deleted.'); return; }
+  if (why.length){ alert(`${o.name} cannot be deleted while it has:\n\n• ${why.join('\n• ')}\n\nMove or remove these first.`); return; }
+  if (!confirm(`Delete ${o.name}?`)) return;
+  clog(`Office deleted: ${o.name}`); db.offices = db.offices.filter(x => x !== o); save(); location.hash = '#/rooms';
 }
 function roomForm(r){
   const isNew = !r;
@@ -24,8 +66,9 @@ function roomForm(r){
   openDialog(`
     <h3>${isNew ? 'New room' : 'Room details'}</h3>
     <label class="f">Name</label><input name="name" required value="${esc(r.name)}" placeholder="e.g. 2.12 – Development Office">
+    ${isNew ? `<label class="f">Office</label><select name="officeId">${sortHu(db.offices, o => o.name).map(o => `<option value="${o.id}"${o.id === curOffice().id ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select>` : `<p class="muted">Office: ${esc((office(r.officeId) || {}).name || '?')}</p>`}
     <div class="two">
-      <div><label class="f">Asset Type</label><select name="kind">${Object.entries(ROOM_KINDS).map(([k, v]) => `<option value="${k}"${k === r.kind ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div><label class="f">Room type</label><select name="kind">${Object.entries(ROOM_KINDS).map(([k, v]) => `<option value="${k}"${k === r.kind ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
       <div><label class="f">Floor / building</label><input name="floor" value="${esc(r.floor)}"></div>
       <div><label class="f">Plan width (px)</label><input name="w" type="number" min="300" max="4000" step="20" value="${r.w}"></div>
       <div><label class="f">Plan height (px)</label><input name="h" type="number" min="200" max="4000" step="20" value="${r.h}"></div>
@@ -35,7 +78,7 @@ function roomForm(r){
     ${dlgActions(isNew ? 'Create' : 'Save')}`,
     data => {
       const v = {name:data.name.trim(), kind:data.kind, floor:data.floor.trim(), w:+data.w || 900, h:+data.h || 500, serviceIds:db.services.filter(s => data['svc_' + s.id]).map(s => s.id)};
-      if (isNew){ const n = {id:uid(), ...v}; db.rooms.push(n); save(); location.hash = '#/room/' + n.id; }
+      if (isNew){ const n = {id:uid(), ...v, officeId:data.officeId}; db.rooms.push(n); save(); location.hash = '#/room/' + n.id; }
       else { Object.assign(r, v); for (const o of roomObjs(r.id)) clampObj(o); save(); render(); }
     });
 }
@@ -48,7 +91,7 @@ function viewRoom(id, selId){
   const os = roomObjs(id), sel = selId ? findObj(selId) : null;
   const ordered = [...os.filter(o => o.kind !== 'door'), ...os.filter(o => o.kind === 'door')];
   return `
-    <div class="row"><a href="#/rooms">← Floorplan</a></div>
+    <div class="row"><a href="#/rooms?office=${r.officeId}">← ${esc((office(r.officeId) || {}).name || 'Floorplan')}</a></div>
     <div class="row" style="margin-top:8px"><h1>${(ROOM_KINDS[r.kind] || '🏢').split(' ')[0]} ${esc(r.name)}</h1><span class="spacer"></span>
       ${ed ? '' : `<button class="primary" onclick="fpStart('${r.id}')">✎ Edit floorplan</button>
         <button onclick="roomForm(room('${r.id}'))">⚙ Room details</button>
@@ -64,7 +107,7 @@ function viewRoom(id, selId){
       </div></div>
       <div class="side">
         <div class="card">${sel && sel.roomId === id ? objPanel(sel, ed) : legend()}</div>
-        ${r.kind === 'server' && !officePool(id).length ? '' : poolsHtml(r, ed)}
+        ${r.kind === 'server' && !officePool(id).length && !sitePool(r.officeId).length ? '' : poolsHtml(r, ed)}
       </div>
     </div>`;
 }
@@ -97,7 +140,7 @@ function objHtml(o, selected, ed){
   </div>`;
 }
 function poolsHtml(r, ed){
-  const off = sortHu(officePool(r.id), a => a.type + a.tag), hy = sortHu(modePool(r.id, 'hybrid'), a => a.tag), wfh = sortHu(modePool(r.id, 'wfh'), a => a.tag);
+  const site = sortHu(sitePool(r.officeId), a => a.tag), off = sortHu(officePool(r.id), a => a.type + a.tag), hy = sortHu(modePool(r.id, 'hybrid'), a => a.tag), wfh = sortHu(modePool(r.id, 'wfh'), a => a.tag);
   const chip = (a, cls, drag) => {
     const k = a.placement && desk(a.placement.deskId), p = a.holder.kind === 'person' ? person(a.holder.id) : null;
     return `<span class="pchip ${cls}${k ? ' placed' : ''}" data-aid="${a.id}"${drag && ed ? ' draggable="true"' : ''}
@@ -108,6 +151,8 @@ function poolsHtml(r, ed){
     <b>Asset pools</b> <span class="muted" style="font-size:12px">${ed ? '– drag an asset onto a desk' : '– turn on editing to place assets'}</span>
     <div class="pool office" id="poolOffice"><h4>🏢 Office pool <span class="muted">(${off.length})</span></h4>
       ${off.map(a => chip(a, '', true)).join('') || '<span class="muted" style="font-size:12px">Empty. Office assets not yet on a desk appear here; they can be dragged back from a desk.</span>'}</div>
+    <div class="pool"><h4>📦 At this office, not placed <span class="muted">(${site.length})</span></h4>
+      ${site.map(a => chip(a, '', true)).join('') || '<span class="muted" style="font-size:12px">None.</span>'}</div>
     <div class="pool hybrid"><h4>🔀 Hybrid assets <span class="muted">(${hy.length})</span></h4>
       ${hy.map(a => chip(a, 'hy', true)).join('') || '<span class="muted" style="font-size:12px">No assets of Hybrid people.</span>'}
       ${hy.length ? '<div class="muted" style="font-size:11px;margin-top:4px">Can go on a desk – the assignment stays, this is not a new checkout.</div>' : ''}</div>
@@ -176,6 +221,8 @@ window.addEventListener('beforeunload', e => { if (fp.editing && fp.dirty){ e.pr
 // null = allowed, otherwise the reason why not
 function dropRule(a, k){
   if (!k || k.kind === 'door') return 'Assets cannot be placed here.';
+  if (a.holder.kind === 'transit') return 'This asset is in transit.';
+  if (a.holder.kind === 'site') return (room(k.roomId) || {}).officeId === a.holder.id ? null : 'This asset belongs to another office.';
   if (a.holder.kind === 'person'){
     const p = person(a.holder.id);
     if (!p) return 'Unknown person.';
@@ -302,9 +349,9 @@ function deleteRoom(id){
   const r = room(id), ks = db.desks.filter(k => k.roomId === id);
   const as = db.assets.filter(a => (a.holder.kind === 'desk' && ks.some(k => k.id === a.holder.id)) || (a.holder.kind === 'office' && a.holder.id === id));
   const placed = db.assets.filter(a => a.placement && ks.some(k => k.id === a.placement.deskId));
-  if (!confirm(`Delete room “${r.name}” with all desks, racks and doors?` + (as.length ? `\nIts ${as.length} asset(s) go to stock.` : ''))) return;
-  for (const a of as) setHolder(a, {kind:'storage'});
+  if (!confirm(`Delete room “${r.name}” with all desks, racks and doors?` + (as.length ? `\nIts ${as.length} asset(s) stay at the office as not placed.` : ''))) return;
+  for (const a of as) setHolder(a, {kind:'site', id:r.officeId});
   for (const a of placed) setPlacement(a, null);
   db.desks = db.desks.filter(k => k.roomId !== id); db.items = db.items.filter(i => i.roomId !== id);
-  db.rooms = db.rooms.filter(x => x.id !== id); save(); location.hash = '#/rooms';
+  db.rooms = db.rooms.filter(x => x.id !== id); save(); location.hash = '#/rooms?office=' + r.officeId;
 }

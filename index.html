@@ -8,7 +8,7 @@
 </head>
 <body>
 <header>
-  <div class="brand">🗄️ TC IT Asset Management</div>
+  <div class="brand"><span id="brandLogo">🗄️</span> TC IT Asset Management</div>
   <nav id="nav">
     <a href="#/" data-r="">Overview</a>
     <a href="#/assets" data-r="assets">Assets</a>
@@ -18,10 +18,11 @@
     <a href="#/docs" data-r="docs">Documents</a>
     <a href="#/log" data-r="log">Logs</a>
     <a href="#/settings" data-r="settings">Settings</a>
+    <a href="#/admin" data-r="admin">Admin Panel</a>
   </nav>
   <button class="primary" onclick="startTour()" title="Automatic tour of the features">▶ Tour</button>
   <button id="themeBtn" class="sm" onclick="toggleTheme()" title="Light / dark mode"></button>
-  <a class="btn sm" id="userChip" href="#/settings/user" title="The name shown in the log"></a>
+  <a class="btn sm" id="userChip" href="#/settings/user" title="Active account"></a>
   <div class="search">
     <input id="q" type="search" placeholder="Search: name, Asset ID, serial, desk, port, ticket, project… (Ctrl+K)" autocomplete="off">
     <div id="results" class="results"></div>
@@ -42,6 +43,7 @@
 <script src="js/labels.js"></script>
 <script src="js/settings.js"></script>
 <script src="js/tour.js"></script>
+<script src="js/auth.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

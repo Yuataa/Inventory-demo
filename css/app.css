@@ -98,6 +98,28 @@ a.chip:hover{border-color:var(--accent);text-decoration:none}
 .fchips a.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .fchips a:hover{text-decoration:none;border-color:var(--accent)}
 .fchips small{opacity:.75}
+.ptask{padding:3px 0;font-size:13px}
+#dlgForm [data-act][hidden]{display:none}
+/* sorting */
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--accent)}
+th .sa{margin-left:4px;color:var(--accent);font-size:10px}
+.tbl-wrap .copy{margin-left:4px}
+/* brand */
+#brandLogo img{height:28px;vertical-align:middle}
+header{border-top:3px solid var(--secondary,transparent)}
+button.primary,.btn.primary{background:var(--brand,var(--accent));border-color:var(--brand,var(--accent));color:var(--on-brand,#fff)}
+.tile.wide{border-color:var(--secondary,var(--accent))}
+[data-corners=square] .card,[data-corners=square] button,[data-corners=square] .btn,[data-corners=square] input,[data-corners=square] select,[data-corners=square] .tbl-wrap,[data-corners=square] dialog{border-radius:2px}
+/* templates, labels, admin */
+.tplgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+@media (max-width:980px){.tplgrid{grid-template-columns:1fr}}
+.lbzoom{zoom:2.2;display:inline-block;border:.2mm dashed #999}
+.perms td.cb{text-align:center}
+.officebar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.officebar select{font-weight:600;min-width:200px}
+.siteitem{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 0;border-bottom:1px solid var(--line)}
+.siteitem:last-child{border-bottom:0}
 /* dashboard */
 .dash{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));margin-bottom:8px}
 .tile{padding:10px 12px;display:flex;flex-direction:column;gap:6px;min-width:0}

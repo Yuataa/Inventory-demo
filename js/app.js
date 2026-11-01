@@ -30,6 +30,8 @@ function render(){
   lastRoute = path;
   const navOf = {asset:'assets', import:'assets', person:'people', room:'rooms', project:'projects'};
   document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.r === (navOf[r] || r)));
+  const need = routePerm(r, parts[1]);
+  if (need && !can(need)){ v.innerHTML = deniedHtml(); return; }
   switch (r){
     case 'assets': v.innerHTML = viewAssets(params); bindAssetFilters(); break;
     case 'asset': v.innerHTML = viewAsset(parts[1]); break;
@@ -39,7 +41,8 @@ function render(){
       else { v.innerHTML = viewPeople(params); bindPeopleFilters(); }
       break;
     case 'person': v.innerHTML = viewPerson(parts[1]); break;
-    case 'rooms': v.innerHTML = viewRooms(); break;
+    case 'rooms': v.innerHTML = viewRooms(params); bindRooms(); break;
+    case 'admin': v.innerHTML = viewAdmin(parts[1]); bindAdmin(); break;
     case 'room': v.innerHTML = viewRoom(parts[1], parts[2]); if (room(parts[1])) bindRoom(parts[1], parts[2]); break;
     case 'projects': v.innerHTML = viewProjects(params); bindProjects(); break;
     case 'project': v.innerHTML = viewProject(parts[1]); bindProject(parts[1]); break;
@@ -50,16 +53,19 @@ function render(){
       if (parts[1] === 'fields' && parts[2]) bindFieldSet(parts[2]);
       if (parts[1] === 'types') bindModelFilters();
       if (parts[1] === 'dashboard') bindDashSettings();
+      if ($('#tplPrev')) bindDocSettings();
       break;
     case 'tour': v.innerHTML = viewDashboard(); setTimeout(startTour, 300); break;
     default: v.innerHTML = viewDashboard();
   }
+  applySorts();
+  applyPerms();
   updateBulk();
   if (flashObj){ const el = document.querySelector(`.obj[data-id="${flashObj}"]`); if (el) el.scrollIntoView({block:'center', inline:'center'}); }
 }
 function renderUserChip(){
   const u = currentUser(), el = $('#userChip');
-  if (el) el.innerHTML = u ? `👤 ${esc(u)}` : '👤 Set your name';
+  if (el) el.innerHTML = `👤 ${esc(u)} · ${esc(currentAccount().role)}`;
 }
 
 window.addEventListener('hashchange', render);
@@ -70,6 +76,8 @@ $('#importFile').addEventListener('change', e => { const f = e.target.files[0]; 
 const setHdr = () => document.documentElement.style.setProperty('--hdr', document.querySelector('header').offsetHeight + 'px');
 window.addEventListener('resize', setHdr);
 try { applyTheme(localStorage.getItem(THEME_KEY)); } catch(e) { applyTheme(null); }
+applyBranding();
+applyNav();
 bindSearch();
 renderUserChip();
 setHdr();

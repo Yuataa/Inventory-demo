@@ -128,46 +128,100 @@ function qrSvg(text){
 
 // ---------- Avery L4732REV: 35.6 × 16.9 mm, 80 labels on A4 (5 across, 16 down) ----------
 const LABEL = {w:35.6, h:16.9, cols:5, rows:16};
-function labelHtml(list, start, g){
+const LABEL_FIELDS = {qr:'QR code', tag:'Asset ID', serial:'Serial Number', name:'Asset Name', model:'Model', type:'Asset Type'};
+const LABEL_CSS = `.lb{width:${LABEL.w}mm;height:${LABEL.h}mm;box-sizing:border-box;display:flex;align-items:center;gap:1mm;padding:1mm;overflow:hidden;background:#fff;color:#000;font-family:Arial,sans-serif}
+  .lb .qr{flex:0 0 14.5mm;height:14.5mm} .lb .qr svg{display:block;width:100%;height:100%}
+  .lb .tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:.3mm;line-height:1.1}
+  .lb .tx b{font:700 6.5pt Consolas,monospace;overflow-wrap:anywhere}
+  .lb .tx span{font-size:5.5pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lb .lg{flex:0 0 auto;max-width:9mm;max-height:12mm;object-fit:contain}`;
+// only values that exist are printed
+function labelInner(a, p){
+  const f = p.fields, logo = p.logo && db.settings.branding.logoId && db.images[db.settings.branding.logoId];
+  const img = logo ? `<img class="lg" src="${logo}" alt="">` : '';
+  const lines = [f.tag && `<b>${esc(a.tag)}</b>`, f.serial && a.serial && `<b>${esc(a.serial)}</b>`, f.name && assetName(a) && `<span>${esc(assetName(a))}</span>`,
+    f.model && modelName(a) && `<span>${esc(modelName(a))}</span>`, f.type && `<span>${esc(typeLabel(a.type))}</span>`].filter(Boolean).join('');
+  return `${p.logoPos === 'left' ? img : ''}${f.qr && a.serial ? `<div class="qr">${qrSvg(a.serial)}</div>` : ''}<div class="tx">${lines}</div>${p.logoPos !== 'left' ? img : ''}`;
+}
+function labelHtml(list, start, p){
   const per = LABEL.cols * LABEL.rows, slots = [...new Array(start - 1).fill(null), ...list], pages = [];
   for (let i = 0; i < slots.length; i += per) pages.push(slots.slice(i, i + per));
   const cell = (a, i) => {
     if (!a) return '';
-    const x = g.left + (i % LABEL.cols) * g.pitchX, y = g.top + Math.floor(i / LABEL.cols) * g.pitchY;
-    return `<div class="lb" style="left:${x.toFixed(2)}mm;top:${y.toFixed(2)}mm"><div class="qr">${qrSvg(a.serial)}</div>
-      <div class="tx"><b>${esc(a.serial)}</b><span>${esc(assetName(a))}</span><span>${esc(modelName(a))}</span></div></div>`;
+    const x = p.left + (i % LABEL.cols) * p.pitchX, y = p.top + Math.floor(i / LABEL.cols) * p.pitchY;
+    return `<div class="lb" style="position:absolute;left:${x.toFixed(2)}mm;top:${y.toFixed(2)}mm">${labelInner(a, p)}</div>`;
   };
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Asset labels – Avery L4732REV</title><style>
     @page{size:A4;margin:0}
-    body{margin:0;background:#e9ebee;font-family:Arial,sans-serif;color:#000}
+    body{margin:0;background:#e9ebee}
     .bar{position:sticky;top:0;background:#1d2330;color:#fff;padding:10px 16px;display:flex;gap:14px;align-items:center;font:14px system-ui;flex-wrap:wrap}
     .bar button{font:inherit;padding:7px 16px;border-radius:6px;border:0;background:#2f6fed;color:#fff;cursor:pointer;font-weight:600}
     .sheet{position:relative;width:210mm;height:297mm;background:#fff;margin:16px auto;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.15)}
-    .lb{position:absolute;width:${LABEL.w}mm;height:${LABEL.h}mm;box-sizing:border-box;display:flex;align-items:center;gap:1mm;padding:1mm;overflow:hidden;outline:.1mm dashed #bbb}
-    .qr{flex:0 0 14.5mm;height:14.5mm} .qr svg{display:block;width:100%;height:100%}
-    .tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:.3mm;line-height:1.1}
-    .tx b{font:700 6.5pt Consolas,monospace;overflow-wrap:anywhere}
-    .tx span{font-size:5.5pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    ${LABEL_CSS} .lb{outline:.1mm dashed #bbb}
     @media print{.bar{display:none} body{background:#fff} .sheet{margin:0;box-shadow:none;page-break-after:always} .sheet:last-child{page-break-after:auto} .lb{outline:0}}
   </style></head><body>
   <div class="bar"><button onclick="print()">🖨 Print</button><span>${list.length} label(s). Print at 100% / Actual size on A4, with no scaling.</span></div>
-  ${pages.map(p => `<div class="sheet">${p.map(cell).join('')}</div>`).join('')}</body></html>`;
+  ${pages.map(p2 => `<div class="sheet">${p2.map(cell).join('')}</div>`).join('')}</body></html>`;
 }
+const curPreset = () => byId(db.settings.labelPresets, db.settings.labelPresetId) || db.settings.labelPresets[0];
 function labelDialog(ids){
-  const list = ids.map(asset).filter(Boolean), ok = list.filter(a => (a.serial || '').trim()), missing = list.filter(a => !(a.serial || '').trim());
+  const list = ids.map(asset).filter(Boolean);
   if (!list.length) return;
-  const g = db.settings.label, num = (k, l) => `<div><label class="f">${l}</label><input type="number" step="0.1" name="${k}" value="${g[k]}"></div>`;
+  let p = JSON.parse(JSON.stringify(curPreset()));
+  const hasLogo = !!db.settings.branding.logoId, sample = list.find(a => a.serial) || list[0], manage = can('labels.presets');
+  const printable = () => p.fields.qr ? list.filter(a => (a.serial || '').trim()) : list;
+  const paint = () => {
+    const missing = p.fields.qr ? list.filter(a => !(a.serial || '').trim()) : [];
+    $('#lblPrev').innerHTML = `<style>${LABEL_CSS}</style><div class="lbzoom"><div class="lb">${labelInner(sample, p)}</div></div>`;
+    $('#lblMissing').hidden = !missing.length;
+    $('#lblMissing').innerHTML = `⚠️ No Serial Number, so no QR code and no label: ${missing.map(a => `<a href="#/asset/${a.id}">${esc(a.tag)}</a>`).join(', ')}`;
+    $('#lblCount').textContent = `${printable().length} label(s) · ${LABEL.w} × ${LABEL.h} mm · ${LABEL.cols * LABEL.rows} labels per A4 sheet`;
+  };
+  const fill = () => {
+    for (const k of Object.keys(LABEL_FIELDS)) $('#lf_' + k).checked = !!p.fields[k];
+    $('#lLogo').checked = !!p.logo; $('#lPos').value = p.logoPos;
+    for (const k of ['top', 'left', 'pitchX', 'pitchY']) $('#lg_' + k).value = p[k];
+    paint();
+  };
+  const num = (k, l) => `<div><label class="f">${l}</label><input type="number" step="0.1" id="lg_${k}"></div>`;
+  const presets = () => db.settings.labelPresets.map(x => `<option value="${x.id}"${x.id === p.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('');
   openDialog(`<h3>🏷 Print labels – Avery L4732REV</h3>
-    <p>${ok.length} label(s) · ${LABEL.w} × ${LABEL.h} mm · ${LABEL.cols * LABEL.rows} labels per A4 sheet</p>
-    ${missing.length ? `<div class="warnbox" id="lblMissing">⚠️ No Serial Number, so no QR code and no label: ${missing.map(a => `<a href="#/asset/${a.id}">${esc(a.tag)}</a>`).join(', ')}</div>` : ''}
+    <div class="row"><label class="muted">Preset</label><select id="lPreset" style="flex:1">${presets()}</select>
+      ${manage ? '<button type="button" class="sm" id="lSave">Save</button><button type="button" class="sm" id="lSaveAs">Save as new</button><button type="button" class="sm danger" id="lDel">Delete</button>' : ''}</div>
+    <p id="lblCount"></p><div class="warnbox" id="lblMissing" hidden></div>
+    <label class="f">Fields on the label</label><div class="grid" style="grid-template-columns:repeat(3,1fr);gap:0 8px">${Object.entries(LABEL_FIELDS).map(([k, l]) => `<label class="cb" style="margin:4px 0"><input type="checkbox" id="lf_${k}"> ${l}</label>`).join('')}</div>
+    <div class="two"><div><label class="cb"><input type="checkbox" id="lLogo"${hasLogo ? '' : ' disabled'}> Company logo</label>${hasLogo ? '' : '<small class="muted">Set a logo in Admin Panel → Branding.</small>'}</div>
+      <div><label class="f">Logo position</label><select id="lPos"><option value="right">Right</option><option value="left">Left</option></select></div></div>
+    <label class="f">Preview</label><div id="lblPrev"></div>
     <label class="f">Start at label position (to reuse a partly used sheet)</label><input type="number" name="start" min="1" max="${LABEL.cols * LABEL.rows}" value="1">
     <details><summary class="muted">Sheet calibration (mm)</summary><div class="two">${num('top', 'Top margin')}${num('left', 'Left margin')}${num('pitchX', 'Horizontal pitch')}${num('pitchY', 'Vertical pitch')}</div>
       <p class="muted" style="font-size:12px">Print one test sheet on plain paper and hold it against a label sheet. Adjust these values if it does not line up.</p></details>
-    ${dlgActions(ok.length ? 'Open print preview' : 'Close')}`,
+    ${dlgActions('Open print preview')}`,
     data => {
-      if (!ok.length) return;
-      db.settings.label = {top:+data.top, left:+data.left, pitchX:+data.pitchX, pitchY:+data.pitchY};
-      save();
-      openPrintWindow(labelHtml(ok, Math.max(1, +data.start || 1), db.settings.label));
+      if (!printable().length){ alert('Nothing to print with these fields.'); return false; }
+      openPrintWindow(labelHtml(printable(), Math.max(1, +data.start || 1), p));
     });
+  for (const k of Object.keys(LABEL_FIELDS)) $('#lf_' + k).addEventListener('change', e => { p.fields[k] = e.target.checked; paint(); });
+  $('#lLogo').addEventListener('change', e => { p.logo = e.target.checked; paint(); });
+  $('#lPos').addEventListener('change', e => { p.logoPos = e.target.value; paint(); });
+  for (const k of ['top', 'left', 'pitchX', 'pitchY']) $('#lg_' + k).addEventListener('change', e => { p[k] = +e.target.value; });
+  $('#lPreset').addEventListener('change', e => { db.settings.labelPresetId = e.target.value; p = JSON.parse(JSON.stringify(curPreset())); save(); fill(); });
+  if (manage){
+    const list2 = () => { $('#lPreset').innerHTML = presets(); };
+    $('#lSave').addEventListener('click', () => { Object.assign(curPreset(), JSON.parse(JSON.stringify(p))); clog(`Label preset saved: ${p.name}`); save(); toast('Preset saved.'); });
+    $('#lSaveAs').addEventListener('click', () => {
+      const name = (prompt('Preset name') || '').trim(); if (!name) return;
+      if (db.settings.labelPresets.some(x => norm(x.name) === norm(name))){ alert('A preset with this name already exists.'); return; }
+      p = {...JSON.parse(JSON.stringify(p)), id:uid(), name}; db.settings.labelPresets.push(JSON.parse(JSON.stringify(p))); db.settings.labelPresetId = p.id;
+      clog(`Label preset created: ${name}`); save(); list2();
+    });
+    $('#lDel').addEventListener('click', () => {
+      if (db.settings.labelPresets.length < 2){ alert('The last preset cannot be deleted.'); return; }
+      if (!confirm(`Delete preset “${p.name}”?`)) return;
+      clog(`Label preset deleted: ${p.name}`);
+      db.settings.labelPresets = db.settings.labelPresets.filter(x => x.id !== p.id); db.settings.labelPresetId = db.settings.labelPresets[0].id;
+      p = JSON.parse(JSON.stringify(curPreset())); save(); list2(); fill();
+    });
+  }
+  fill();
 }
