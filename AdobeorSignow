@@ -1,0 +1,28 @@
+Így működne
+Az oldalon a dokumentumnál rákattintasz a küldés gombra.
+Az oldal elküldi a PDF-et, az aláíró nevét és e-mail-címét a kis szerveroldali szolgáltatásnak.
+A szolgáltatás a saját titkos kulcsával továbbküldi ezeket a SignNow-nak vagy az Adobe-nak.
+Az aláíró e-mailt kap, és telefonon vagy gépen aláírja a dokumentumot.
+Aláírás után a SignNow vagy az Adobe automatikus értesítést (webhookot) küld a szolgáltatásnak.
+A szolgáltatás letölti az aláírt PDF-et és eltárolja.
+Az oldal lekéri az állapotot, a dokumentum „Signed” lesz, és mellé kerül az aláírt PDF.
+Mi kell hozzá
+Előfizetés API-hozzáféréssel: az árakat és a csomagokat a szolgáltatónál kell ellenőrizni, ezekről most nincs friss adatom.
+Szerveroldali szolgáltatás: GitHub Pages-en nem futhat. Megfelel rá egy serverless funkció (például Azure Functions vagy Cloudflare Workers), vagy a céges szerver.
+Tárhely az aláírt PDF-eknek: a szolgáltatás nem tud a böngészőbe írni, ezért az aláírt fájlt valahol tárolni kell.
+Valódi PDF-készítés: most a böngésző nyomtatásával készül a PDF, kattintásra küldéshez automatikusan kell előállítani.
+Bejelentkezés: enélkül bárki küldhetne dokumentumot a céges fiókból, ezért a jelenlegi jelszó nélküli fiókváltás itt nem elég.
+Adatvédelmi egyeztetés: nevek, e-mailek és eszközadatok kerülnek külső szolgáltatóhoz, ezt érdemes az adatvédelmi felelőssel megbeszélni.
+
+Az oldalon a csatlakozási pont már megvan (esignRequest a js/docs.js-ben), ide kell bekötni a küldést. A részletes teendők az ESIGN-INTEGRATION.md fájlban vannak.
+
+Három lehetőség, a legegyszerűbbtől
+Megoldás	Szerver kell?	Mikor jó
+Kézi folyamat	Nem	A PDF-et feltöltöd a SignNow vagy Adobe felületére, majd az aláírtat a programba. Ez már ma is működik, és ez elég a bemutatóhoz.
+Power Automate vagy hasonló eszköz	Saját szerver nem	Ha van Microsoft 365-ötök, kevés kóddal is megoldható lehet. Ellenőrizni kell, hogy a csomagotok tartalmazza-e a szükséges csatlakozót.
+Teljes integráció	Kis szerveroldali rész	Sok dokumentumnál érdemes, és ez adja a gombnyomásos küldést és az automatikus visszaérkezést.
+Javaslatom
+
+Ha a cégnek már van Adobe Acrobat Sign licence, azt válaszd, mert nem kell új szolgáltatót bevezetni. Csak az Adobe Acrobat PDF-szerkesztő viszont nem ugyanaz, az API-hoz Acrobat Sign csomag kell, ezt az IT-val nézesd meg.
+
+A mostani HTML-verzióval a kézi folyamat a reális. A teljes integrációt akkor érdemes elkezdeni, amikor a program szerverre és adatbázisra költözik, mert akkor a bejelentkezés és a fájltárolás is megoldódik.
