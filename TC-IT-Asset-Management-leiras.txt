@@ -1,0 +1,883 @@
+================================================================================
+TC IT ASSET MANAGEMENT - TELJES FUNKCIONÁLIS LEÍRÁS ÉS ÚJRAÉPÍTÉSI SPECIFIKÁCIÓ
+Állapot: 2026-11-02, az "UI egyszerűsítés és gyorsabb eszközkezelés" frissítés után
+================================================================================
+
+HOGYAN HASZNÁLD
+Másold be ezt a teljes szöveget egy új beszélgetésbe, és írd hozzá:
+"Ez alapján építsd újra a programot, majd fejezd be a 20. fejezetben leírt
+hiányzó feladatot."
+Ha a meglévő kód megvan, inkább azt töltsd fel, és csak a 20. fejezetet kérd.
+A leírás a működést rögzíti. A kód nem szó szerint fog egyezni, a viselkedés igen.
+
+Írásmód: a felületen megjelenő szövegek angolul szerepelnek, pontosan így kell
+őket átvenni. A magyarázat magyar.
+
+TARTALOM
+ 0. A legfontosabb: hol tartunk
+ 1. Cél és állandó fejlesztési szabályok
+ 2. Technikai felépítés
+ 3. Fájlok és betöltési sorrend
+ 4. Adatmodell
+ 5. Az eszköz helye: holder-logika és alapszabályok
+ 6. Fejléc, navigáció, útvonalak, közös elemek
+ 7. Overview
+ 8. Assets lista
+ 9. Asset Details (eszköz adatlap)
+10. Tömeges hozzárendelés, áthelyezés, visszavétel, csere
+11. People
+12. Floorplan
+13. Projects és Shipments
+14. Documents
+15. Logs
+16. Settings
+17. Admin Panel: fiókok, szerepkörök, jogosultságok, Branding
+18. Címkenyomtatás és QR
+19. Import, export, mentés, Tour, demo adatok
+20. BEFEJEZENDŐ: PDF-sablonok (9. pont) és nyitott döntések
+21. Ismert hibák és korlátok
+22. Ellenőrzési lista újraépítés után
+
+================================================================================
+0. A LEGFONTOSABB: HOL TARTUNK
+================================================================================
+Az utolsó frissítés 16 pontos specifikációjából minden elkészült, KIVÉVE:
+
+  9. pont: Documents - PDF-sablonok és mezők elhelyezése. EGYÁLTALÁN NEM KÉSZÜLT EL.
+
+Ok: két külső könyvtár kell hozzá (pdf.js, pdf-lib), és a letöltésüket a
+Claude-oldali jogosultsági rendszer letiltotta. A letiltást nem szabad megkerülni.
+A folytatás feltétele: a felhasználó engedélyezi a letöltést, vagy kézzel beteszi
+a fájlokat a projektbe. Részletes terv: 20. fejezet.
+
+Részben megvalósult, korlátozott elemek: lásd 21. fejezet.
+
+Utolsó ellenőrzés: 138 automatizált böngészős teszt sikeres a demo adatokon,
+21 lépéses Tour hibátlan, konzolhiba nincs.
+
+Mentések a munkamappában:
+  mentesek/2026-11-02_ux-update-elott       az utolsó frissítés előtti állapot
+  mentesek/2026-11-02_multi-office-elott    a Multi-Office frissítés előtti állapot
+  it-raktar/   a legfrissebb forrás
+  feltoltes/   ugyanaz, ezt kell GitHubra feltölteni
+  UPDATE-LIST.md   a korábbi patch notes-ok
+
+================================================================================
+1. CÉL ÉS ÁLLANDÓ FEJLESZTÉSI SZABÁLYOK
+================================================================================
+Cél: IT-eszközkezelő rendszer (a Snipe-IT-hez hasonló) statikus webalkalmazásként.
+Eszközök, személyek, irodák, alaprajzok, projektek, szállítások, dokumentumok és
+naplók egy helyen. Demó és használat GitHub Pages-en.
+
+Kötelező szabályok minden fejlesztésnél:
+ - Ne vezess be új backendet, aktív SQL-adatbázist vagy .NET 10 migrációt.
+ - Maradjon kompatibilis a GitHub Pages környezettel.
+ - Ne építsd újra a meglévő funkciókat, és ne távolíts el működő megoldást.
+ - A teljes felhasználói felület angol nyelvű. A felhasználóval magyarul beszélünk.
+ - Ne állítsd, hogy egy funkció kész, ha nem ellenőrizted.
+ - Ne legyen látszatgomb: ami látszik, az működjön.
+ - Ne jeleníts meg hamis, működő e-aláírás-integrációt.
+ - Ne tárolj API-kulcsot vagy titkos adatot kliensoldali kódban.
+ - Ne állítsd, hogy a kliensoldali jogosultság valódi szerveroldali biztonság.
+ - Kerüld a szükségtelen külső függőségeket.
+ - Üzleti szabályt ne lazíts a felület egyszerűsítése kedvéért.
+ - Minden frissítés előtt mentés, a végén patch notes:
+   újonnan létrehozva, módosítva, törölve, plusz korlátok és elvégzett tesztek.
+
+================================================================================
+2. TECHNIKAI FELÉPÍTÉS
+================================================================================
+ - Vanilla JavaScript, build és keretrendszer nélkül. Klasszikus <script> fájlok
+   közös globális névtérben, 'use strict' módban.
+ - Hash-alapú útvonalak (#/assets), ezért GitHub Pages-en a frissítés és a
+   közvetlen link is működik.
+ - Tárolás böngészőben:
+     localStorage  itraktar_v2       teljes adatbázis JSON-ként
+                   itraktar_v1       régi egyfájlos verzió, innen automatikus átvétel
+                   itraktar_v2_tour_backup   valódi adat a Tour alatt
+                   itraktar_account  aktív fiók azonosítója
+                   itraktar_user     régi név, csak migrációhoz
+                   itraktar_scope    kiválasztott ország és iroda
+                   itraktar_theme    világos / sötét
+                   itraktar_office   régi, már nem használt
+     IndexedDB     itraktar_files / files   feltöltött aláírt dokumentumok
+ - Képek base64 data URL-ként a db.images-ben, 240 px-re kicsinyítve JPEG-ként,
+   a logó 400 px. Mentéskor a nem használt képeket törölni kell (gcImages).
+ - Minden módosítás után: save() és render(). A render a teljes oldalt újraépíti.
+ - Külső könyvtár egyetlen van: az Excelhez az xlsx 0.18.5, futás közben, csak
+   szükség esetén töltve innen:
+   https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js
+   Ha nem elérhető, a CSV akkor is működik.
+ - QR-kód kódoló saját, beépített kód (offline is nyomtat).
+ - Több böngészőfül: a storage esemény újratölti az adatot (nem Floorplan
+   szerkesztés vagy Tour közben).
+ - Téma: CSS-változók, világos és sötét mód, rendszerbeállítás követése,
+   kézi váltó gomb a fejlécben.
+
+Megjelenés: kártyák, táblázatok, pillek (ok zöld, warn sárga, bad piros, acc kék).
+Alapszín #2f6fed, háttér #f5f6f8, sötét háttér #14171c. Szélesség max. 1440 px.
+Rendszerbetűtípus, 14 px. Modális ablak: natív <dialog>, 600 px, széles változat
+860 px.
+
+================================================================================
+3. FÁJLOK ÉS BETÖLTÉSI SORREND
+================================================================================
+index.html, css/app.css, majd pontosan ebben a sorrendben:
+  js/data.js       konstansok, tárolás, migráció, demo adatok, helylogika, napló
+  js/ui.js         segédfüggvények, dialógus, kereshető lista, táblák, rendezés,
+                   tömeges kijelölés, Logs oldal, globális keresés
+  js/docs.js       dokumentumok
+  js/assets.js     Overview, Assets, adatlap, varázsló, csere, CSV, eszközimport
+  js/people.js     People, státuszok, visszavételek, személyimport
+  js/floorplan.js  országok, irodák, szobák, alaprajz
+  js/projects.js   projektek, Shipment, Replacement
+  js/labels.js     QR, címkék, Scan QR
+  js/settings.js   Settings
+  js/tour.js       automatikus bemutató
+  js/auth.js       hely-hozzáférés, jogosultság, Admin Panel, Branding
+  js/app.js        útválasztás, téma, indítás
+
+Az index.html fejléce: márkanév (#brandLogo + "TC IT Asset Management"), menü,
+"▶ Tour", téma gomb, #scopeBar, aktív fiók gomb (#userChip), globális kereső (#q,
+placeholder: "Search: name, Asset ID, serial, desk, port, ticket, project… (Ctrl+K)").
+Törzs: <main id="view">, <dialog id="dlg"><form id="dlgForm">, rejtett JSON input.
+
+================================================================================
+4. ADATMODELL (db objektum)
+================================================================================
+version: 2, seq:{asset:n}, images:{id:dataUrl}, prefs:{accountId:{...}}
+
+countries[]  {id, name, code}
+offices[]    {id, name, code, countryId}
+services[]   {id, name, note}
+roles[]      {id, name}                    Job Role, nem jogosultság
+modes[]      {id, name, icon, behavior: onsite|hybrid|wfh}
+             Alap: Onsite 🏢, Hybrid 🔀, WFH 🏠
+people[]     {id, name, email, serviceId, roleId, mode, officeId, status, tickets[],
+              note, isd, suspension:{start,end}|null, endDate}
+             tickets: {id, no, note, ts, statusFrom, statusTo}
+             status: Active | Suspended | Leaver
+rooms[]      {id, name, floor, kind, w, h, serviceIds[], officeId, savedAt}
+             kind: office 🏢 Office, server 🗄️ Server room, storage 📦 Storage room,
+             meeting 👥 Meeting room
+desks[]      {id, roomId, kind: desk|rack, label, x, y, w, h, personId, shared,
+              sharedNote, port}
+items[]      {id, roomId, kind:'door', label, x, y, w, h}
+types[]      {id, name, icon, system, nameRule: model|custom, nameUnique}
+             Alap: monitor (system), pc = Computer (system, custom, unique), headset,
+             dock, keyboard = Keyboard/mouse, phone, printer, switch,
+             router = Router / firewall, server, ups, other
+models[]     {id, typeId, name, imageId}
+fieldSets[]  {id, name, typeIds[], fields[{id,name,kind,required,options[],active}]}
+             kind: text, number, date, bool, select
+assets[]     {id, tag, legacyTag, officeId, name, type, modelId, serial, status,
+              holder, placement:{deskId}|null, serviceId, custom:{fieldId:érték},
+              note, arrived, warrantyUntil, supplier, orderNo, created, assignedAt}
+             status: ok Working, faulty Faulty, missing Missing, repair In Repair,
+             lost Lost, retired Retired
+docs[]       {id, no, kind: out|in|swap, personId, personName, date, handler, note,
+              reason, createdAt, fileId, fileName, fileSize, signedAt, projectId,
+              swapId, items[{assetId,tag,type,model,serial,assignedAt,role}],
+              tpl:{title,text,footer,show,company,address,logoId},
+              esign:{provider,status,envelopeId}}
+swaps[]      {id, ts, date, oldId, newId, oldTag, newTag, reason, note, ticket,
+              oldStatus, where, personId, docId}
+returns[]    {id, assetId, personId, state, sources[status|project], projectId,
+              ticket, due, openedAt, closedAt}
+             state: notRequired, awaiting, returned, cancelled
+projects[]   {id, name, owner, pickupDate, ticket, note, status, activities[],
+              officeId, created, completedAt, result, issuedIds[], targetServiceId,
+              targetRoomId, accessories, participants[], demand[], shipments[],
+              replacements[]}
+             status: planning Planned, progress In Progress, ready Ready,
+             completed Completed, cancelled Cancelled
+             activities: shipment, preparation, assignment, replacement
+  participant {id, personId, pickupDate, computerId, monitorId, monitor2Id,
+               otherIds[], prep{}, manualSerial{}, checklist{}}
+  demand      {id, typeId, qty, assetIds[], prep{}}
+  shipment    {id, from, fromOfficeId, toOfficeId, sendPersonId, recvPersonId,
+               toPersonId, toRoomId, assetIds[], status: Preparing|Sent|Received,
+               required, origin{assetId:holder}, ts, receivedAt}
+  replacement {id, personId|null, serviceId|null, oldId, newId, ticket, note, ret, ts}
+log[]        {id, ts, cat, assetId, projectId, personId, text, by, from, to, ticket,
+              note}. Legfeljebb 8000 bejegyzés.
+             cat: created, updated, moved, checkout, returned, project, status, config
+accounts[]   {id, username, displayName, role, enabled, personId, locations{}}
+             locations kulcs: c:<countryId>, o:<officeId>
+             érték: none, view, role, inherit vagy egy szerepkör-azonosító
+accessRoles[] {id, name, builtin}   Superadmin, Admin, Viewer + egyediek
+permissions  {roleId:{kulcs:bool}}  Superadmin nincs benne
+settings     company, address, handler, docTitles{}, docFooter, docShow{}, esignProvider,
+             outText, inText, swapText, agedYears (5), branding{}, labelPresets[],
+             labelPresetId, label{}, dashboard{items[],defaults{}}
+
+prefs[fiókId]: filters[], cols[], views[{id,name,query,cols,sort}], dash{}
+
+Migráció: a migrate(d) idempotens, minden betöltésnél és a demo adaton is lefut.
+Pótolja a hiányzó mezőket és listákat, a régi Visitor szerepet Viewerre, a régi
+Delivered státuszt Receivedre, a projects.ship jogot a három Shipment-jogra cseréli.
+Régi adat esetén a meglévő irodák Hungary alá kerülnek, és létrejön egy üres
+Poland Office. A nem Superadmin fiókok az első országhoz kapnak hozzáférést.
+Ha nincs iroda, létrejön a "Main Office". Nincs fiók esetén létrejön egy superadmin.
+Adatot soha nem törölhet.
+
+Asset ID: HU + 6 számjegy (HU000001). A számláló csak nő, törölt azonosító nem tér
+vissza. Nem szerkeszthető. A régi azonosító a Legacy ID.
+Asset Name: üres name esetén a Model Name-et mutatja és követi.
+
+================================================================================
+5. AZ ESZKÖZ HELYE: HOLDER-LOGIKA ÉS ALAPSZABÁLYOK
+================================================================================
+Minden eszköznek pontosan egy holdere és egy officeId-ja van.
+
+holder.kind:
+  storage   📦 In Stock - raktárkészlet (az iroda: a.officeId)
+  person    👤 személyhez kiadva
+  office    🏢 szoba készlete (room pool), asztalon kívül
+  desk      🪑 asztalon vagy rackben
+  site      🏢 az irodában van, még nincs szobában ("not placed yet")
+  transit   🚚 szállítás alatt, holder.id = shipment id
+
+placement: Hybrid személy eszköze közben asztalon is lehet; ettől a személynél marad.
+
+Minden helyváltozás a setHolder(a, h, extra) függvényen megy át:
+ - az iroda frissül, ha a cél irodához kötött
+ - a placement törlődik, ha a személy változik vagy megszűnik
+ - assignedAt beáll (storage, office, site, transit esetén null)
+ - napló: checkout, returned vagy moved, from/to mezőkkel, szöveg:
+   "Checked out: A → B", "Returned: A → B", "Moved: A → B"
+ - ha személytől elkerül, az ő nyitott return rekordja "returned" lesz
+ - nem Active személyhez kerülve automatikusan nyílik egy return
+
+Üzleti szabályok:
+ - Másik irodába vagy országba az eszköz CSAK Shipmenttel kerülhet.
+ - Személyhez kiadás országon belül másik irodába Shipment nélkül lehet, az eszköz
+   irodája marad. Országok között tiltott.
+ - Transit eszköz nem mozgatható. Preparing shipmentben lévő sem a varázslóból és
+   a Move Asset-ből.
+ - A státusz és a hely független: helyváltozás nem írja át a státuszt, a Shipment sem.
+ - Felhasználói státusz változása nem mozgat eszközt, csak Awaiting Return rekordot
+   nyit vagy mond le.
+ - "Returned" állapotot csak valódi visszakerülés ad.
+ - Projektben kiválasztott eszköz csak foglalt, kiadni a lezárás adja ki.
+ - Törölt szoba eszközei site-ra, törölt asztal eszközei szoba poolba kerülnek, nem
+   raktárba.
+ - Törölt személy eszközei raktárba kerülnek, az asztala felszabadul, a kapcsolt fiók
+   megmarad személy nélkül. Aktív projekt résztvevője nem törölhető.
+
+Számítások:
+ isOut = lost, missing, retired. isFaulty = faulty, repair.
+ isActiveAsset = nem isOut és nem isFaulty.
+ Aged = az érkezéstől eltelt évek >= agedYears.
+ Garancia: lejárt = piros "Expired (dátum)", 60 napon belül sárga
+ "expires in N days", különben zöld "until dátum", nincs adat esetén "–".
+ ASSET_VIEWS:
+   office   Office / Onsite Assets: holder office, desk vagy site
+   assigned Assigned Assets: person
+   storage  Storage / Spare Assets: storage és nem isOut
+   health   Faulty / Aged Assets: nem isOut és (faulty vagy aged)
+   awaiting Assets Awaiting Return: van nyitott return
+   transit  Assets In Transit
+
+Visszavétel (db.returns):
+ Egy rekordtípus a User Status és a Replacement esetére. A határidő: saját due, vagy
+ Leavernél endDate, Suspendednél a kezdődátum. Nincs dátum: "No deadline set".
+ Szín: sárga határidő előtt, piros lejárt, szürke nincs határidő.
+ Active-ra visszaállítva a status forrású rekordok törlődnek (cancelled), ha nincs
+ más forrásuk.
+
+================================================================================
+6. FEJLÉC, NAVIGÁCIÓ, ÚTVONALAK, KÖZÖS ELEMEK
+================================================================================
+Menü: Overview, Assets, People, Floorplan, Projects, Documents, Logs, Settings,
+Admin Panel. A menüpontot a <modul>.menu jog rejti el. Viewer nem látja a Tourt.
+
+Útvonalak:
+ #/  Overview                     #/assets?szűrők      #/asset/<id>
+ #/import                         #/people?szűrők      #/people/import
+ #/person/<id>                    #/rooms?office=<id>  #/room/<id>[/<objektumId>]
+ #/projects?q=&status=            #/project/<id>       #/docs?f=wait|signed
+ #/log?cat=&q=                    #/settings/<fül>     #/settings/fields/<id>
+ #/admin/<accounts|permissions|preview|branding>       #/tour
+
+Country / Office választó (#scopeBar):
+ Két lista: Country és City / Office ("All Offices"). Csak a fiók számára elérhető
+ helyek látszanak. A választás megmarad. Vegyes országnézet nincs: az All Offices
+ mindig egy országot jelent. Érvényes az Overview, Assets, People, Floorplan,
+ Projects, Documents, Logs, globális keresés és CSV-export oldalakon.
+ Projekt akkor látszik, ha bármely irodája a kiválasztásban van.
+ Közvetlen link más helyre: ha van hozzáférés, megjelenik egy "Switch to ország ·
+ iroda" gomb, különben "Access denied".
+
+Globális kereső: People, Assets, Desks, Offices, Projects, Service, Floorplan
+csoportokra bontva, max. 40 találat, Ctrl+K, nyilak, Enter, Esc. Jogosultság szerint
+szűr.
+
+Kereshető legördülő lista (közös komponens):
+ Minden <select> kap ilyet, ha legalább 7 eleme van, vagy combo osztályú, és nem
+ multiple, nem size, nem disabled. A natív select marad az egyetlen adatforrás, ezért
+ az értékek, change események, validációk változatlanok.
+ Kattintásra lista nyílik keresőmezővel ("Type to search…"). Gépelés indítja is.
+ Szavanként szűr, az optgroup neve is kereshető. Rejtett opció nem látszik, a tiltott
+ halvány. Nyilak, Home, End, Enter, Esc, Tab. Esc csak a listát zárja, a dialógust
+ nem. Üres találat: No matches for "x". Dialógusban a dialóguson belül jelenik meg.
+
+Keresés szabálya (matchWords): minden beírt szónak szerepelnie kell, bármilyen
+sorrendben, ékezet és kisbetű-nagybetű nélkül.
+
+Tábla-rendezés minden listán: kattintás növekvő, újra csökkenő, harmadszor ki.
+Shift+kattintás további oszlop, sorszám jelzi a sorrendet. Kivétel a ".nosort" tábla.
+
+Másolás gomb (⧉): Asset ID, Serial Number, portszám, ticket. Visszajelzés: toast.
+
+Dialógus: openDialog(html, onSubmit, {wide}). A második réteg az askConfirm(cím, html,
+gomb), ami Promise-t ad és gombkezelőkkel zár (a dialog close eseményre nem szabad
+támaszkodni).
+
+================================================================================
+7. OVERVIEW
+================================================================================
+Cím: Overview. Gombok: "⚙ Customize Overview", "Default layout".
+Elemek (azonosító: felirat):
+ Csempék: total Total Active Assets, office Office / Onsite Assets, assigned Assigned
+ Assets, storage Storage / Spare Assets, lost Lost Assets, missing Missing Assets,
+ faulty Faulty Assets, health Faulty / Aged Assets, returns Assets Awaiting Return,
+ transit Assets In Transit, projects Active Projects, unsigned Documents to Sign,
+ nodoc Assets Without Document.
+ Szekciók: warranty Warranty Expiring, activeList Active Projects List, awaitList
+ Awaiting Returns, equip Equipment by Person, moves Recent Asset Movements, models
+ Top Models, services Services, remote WFH / Hybrid People, recent Recent Events.
+Alapból rejtett: models, services, remote. A total széles csempe.
+
+A csempék számai megegyeznek a linkelt szűrt listával (ugyanaz a filterAssets adja).
+Total, Office, Assigned, Storage: status=active szűréssel. Health: tsplit Faulty /
+Aged / Both. Típusbontás (tchip) a total, office, assigned, storage, health csempén.
+
+Active Projects List: név (link), státusz, tulajdonos, progress. Max. 8 sor, utána
+"All active projects ›".
+Awaiting Returns: személyenként, csak valódi awaiting return rekordból. Személy link,
+darabszám link (#/assets?view=awaiting&person=), eszközcsipek, állapot, határidő.
+Equipment by Person: csak közvetlenül személynél lévő eszköz. Típusonként ikon +
+darab, linkkel a szűrt listára. A nem aktív eszközök külön "Needs Attention"
+oszlopban státuszpillként. Max. 10 sor, darabszám szerint.
+Recent Asset Movements: az utolsó 8 moved, checkout, returned napló.
+Warranty: lejárt vagy 60 napon belül lejáró, nem retired.
+
+Testreszabás két szinten: Settings → Dashboard a rendszerszintű alap,
+Customize Overview a fiók saját ki-be kapcsolása (Reset to default).
+
+================================================================================
+8. ASSETS LISTA
+================================================================================
+Fejrész: cím, gombok: 📷 Scan QR Code, ⚙ Customize View, ⬇ CSV,
+⬆ Import (Excel / Snipe-IT), + New asset.
+Számláló sor: "N shown · X active · a Lost · b Missing · c Faulty · clear filters".
+Nézet esetén típusbontás csipekkel.
+
+Szűrők: keresőmező (Asset ID, legacy, név, modell, típus, serial, megjegyzés, szállító,
+rendelés, hely, iroda, Service, egyedi mezők).
+Szűrők listája: View, Asset Type, Model, Office, Room, Employee, Service, Work Mode,
+Location, Status, Warranty. Alapból látszik: Asset Type, Office, Employee, Status.
+Plusz "Saved views…" lista. View=health esetén Category és Minimum age is.
+A Model a kiválasztott típushoz szűkül, a Room az irodához.
+Status lista: Active only + minden státusz. Warranty: Expires within 60 days, Expired,
+Not set. Location: holder-típusok.
+
+Aktív szűrők sora: minden aktív szűrő csip, ✕-szel törölhető. Az elrejtett szűrő
+sárga, "(hidden filter)" jelöléssel, és továbbra is érvényes. Új szűrő választásakor
+az elrejtett érték megmarad a címben. "Clear all".
+
+Customize View dialógus (fiókonként mentve):
+ Search Filters: jelölőnégyzetek.
+ Table Columns: jelölőnégyzetek, ↑ ↓ sorrend. Csak megjelenítés.
+ Saved Views: lista törléssel, névvel mentés ("Save as view"). A nézet menti a
+ szűrőket, oszlopokat, sorrendet, rendezést. Beépített nézetek: My Office (ha a fiók
+ személyhez kötött), Warranty Expired, Awaiting Returns, Faulty Assets.
+ Gombok: Reset to defaults, Cancel, Apply.
+
+Oszlopok: Asset ID (foglaltság és Awaiting Return pillel), Asset Name, Type, Model,
+Serial Number, Status (Aged pillel), Warranty, Location, Country, City / Office, Notes,
+Service, Assigned To, Supplier, Order / Invoice, Order Arrived, Legacy ID.
+Alap: az első tíz. Hosszú szöveg két sorra vágva, a teljes szöveg buborékban.
+Az Asset ID, Name, Type, Model linkek. A tábla 1024 px-en sem görget vízszintesen.
+
+Tömeges kijelölés: jelölőnégyzetek, "összes". Sáv:
+ "✔ N selected", Assign Selected Assets, 📦 Return to Stock, 🏷 Print labels,
+ státuszlista + Set, ✕ Clear selection.
+A gomb tiltott, ha egyik kijelölt eszközre sem használható, indoklással.
+Szűrő által rejtett kijelölés jelzése: "(n hidden by the filter)".
+Set: előnézeti táblával és megerősítéssel fut.
+
+Új eszköz / szerkesztés (assetForm): Country / Office (újnál), Asset ID (automatikus,
+tiltott), Legacy ID, Asset Type, Model (új is felvehető), Asset Name (custom típusnál
+kötelező, nameUnique ellenőrzés), Serial Number (duplikátum figyelmeztet), Status,
+Service, Location (kereshető lista), egyedi mezők, Order arrived, Warranty end
+(1, 2, 3, 5 yr gomb), Supplier, Order / invoice number, kép (a modellhez tartozik), Note.
+Helyváltoztatás szerkesztéskor ugyanazon a szabályokon megy át.
+
+Törlés: figyelmeztet, az azonosító nem tér vissza, projektekből kikerül, nyitott
+return cancelled.
+
+================================================================================
+9. ASSET DETAILS
+================================================================================
+#/asset/<id>. Nem talált eszköz: "Asset not found" magyarázattal.
+Fejléc: ikon, Asset ID másolással, gombok: 🔁 Swap (nem raktárban), 🏷 Label, ✎ Edit,
+Delete. Alatta név, típus, modell, S/N, legacy ID.
+Helydoboz: "Currently: <hely>", asztal link, projektfoglalás, return állapot "Record
+return" gombbal.
+Műveletek: Move Asset, 📦 Return to Warehouse. Csak Assets Move vagy Assign joggal.
+Transit vagy raktár esetén tiltva indoklással.
+Kártyák: Country, City / Office, Asset ID, Asset Name, Type, Model, Serial Number,
+Status, Service, Note; Order arrived (kor és Aged), Warranty end, Supplier, Order /
+invoice, Added.
+Szakaszok: Custom fields, 🔁 Swaps, 📄 Documents that include it, Movement history,
+All changes.
+Movement history: Date, Type, From, To, By, Ticket, Note. Régi bejegyzésnél a from/to a
+szövegből olvasandó. Felirat: "Kept in this browser with the rest of the data. It is
+a working record, not a tamper-proof audit log."
+
+================================================================================
+10. HOZZÁRENDELÉS, ÁTHELYEZÉS, VISSZAVÉTEL, CSERE
+================================================================================
+10.1 Közös ellenőrzés: assignCheck(asset, cél)
+Eredmény: ok (Ready), review (Needs your check, csak pipával megy), blocked (Cannot be
+changed), same (No change). Sorrend:
+ 1. jog hiánya blocked (Service: assets.edit, személy: assets.assign, más: assets.move)
+ 2. transit blocked; nyitott shipmentben blocked
+ 3. Service cél: azonos same; más Service review; más Service-ű személynél review;
+    különben ok ("Only the Service link changes, not the location.")
+ 4. azonos hely same
+ 5. más iroda vagy ország blocked: "Moving it there needs a Shipment."
+ 6. review okok, ezek összefűzve: másik személynél van; nyitott return (visszavettnek
+    számít); a személy másik irodában dolgozik; a cél nem Active; projektfoglalás
+    (megerősítve kikerül a projektből); státusz nem Working
+ 7. különben ok
+
+10.2 Assign Selected Assets varázsló
+Lépések: 1 Review assets, 2 Choose target, 3 Check, 4 Preview, 5 Result.
+ 1: táblázat (Asset Name, Asset ID, Type, Model, Current Location), ✕ eltávolítás.
+ 2: Person (kereshető, Service és iroda látszik, info doboz), Office (iroda, opcionális
+    Room or desk; személy nem kell), Service, Warehouse. Ticket és Note opcionális.
+    Csak a kiválasztott ország személyei és irodái.
+ 3: soronként eredmény és ok, review soron "Include this asset".
+ 4: Selected, Target, Assignment type, Service, Will change, Stay unchanged, Ticket,
+    Note; "What changes" (From, To) és "Stay unchanged" lista okkal.
+ 5: "n of m asset(s) changed", Failed, Not changed okkal, személynél
+    "📄 Create handover document".
+A gomb: "Confirm: change N asset(s)". Dupla kattintás ellen busy jelző. Futás előtt
+újraellenőriz, eszközönként try/catch. A sikeres eszközök kikerülnek a kijelölésből.
+Csak valódi adatváltozáskor kér megerősítést.
+
+10.3 Move Asset
+Egy kereshető lista: In Stock; Assign to a person; Office, not placed yet; Room pool;
+szoba asztalai; Service; "Another office or country – Shipment required".
+Választás után Planned és Type, plusz az ellenőrzés eredménye. Review esetén "I
+checked this, go ahead". Shipment célnál nem mozgat, a Projects-hez irányít. Ticket,
+Note. Gomb: Confirm move.
+
+10.4 Return to Warehouse
+Adatlapról és a Floorplan asztal eszközlistájából. Dialógus: eszköz, jelenlegi hely,
+raktár. Választó csak ha több raktár van (In Stock + az iroda Storage room szobái).
+Figyelmeztet: személy-hozzárendelés megszűnik, return lezárul, projektfoglalás kikerül,
+szerkesztett alaprajz esetén az alaprajzzal mentődik. Opcionális return dokumentum.
+Transit tiltott. Raktárban: "already in stock".
+
+10.5 Return to Stock (régi, megmaradt)
+toStorage dialógus: cél (In Stock, iroda, szobák), státusz, opcionális dokumentum.
+A "Record return" ezt használja. Tömeges: bulkMove('storage') a confirmMove
+szabályaival, utána return dokumentumot ajánl, ha egy személytől jött.
+
+10.6 Swap
+Az adatlapról vagy személytől. Nem raktári, nem transit eszközre. Mezők: Reason
+(Failure, Damage, Lost / stolen, Upgrade, Other), a régi eszköz új státusza
+(alap In Repair; Lost→lost, Upgrade→ok), Target (Person, Service vagy Location),
+Ticket, Note, csereeszköz (azonos iroda raktárából, Working, nem foglalt, "Same type
+only"), Date, Handed over by, dokumentum.
+Véglegesítés előtt összefoglaló: Old asset (comes back), New asset (handed over).
+Az új megkapja a régi helyét és placementjét, Service célnál a Service-t, a régi
+raktárba kerül. db.swaps rekord, 🔁 napló. Személynél swap dokumentum.
+
+================================================================================
+11. PEOPLE
+================================================================================
+Lista: Name + e-mail, City / Office, Service, Job Role, Work Mode, User Status (ISD,
+awaiting pillel), Tickets, Desk, Assets, Document. Szűrők: kereső, Service
+(– no Service –), Work Mode, User Status. Gombok: Import, + New person.
+
+Űrlap: Full Name*, E-mail, Service, Job Role, City / Office, ISD Member, Work Mode,
+Note.
+
+Adatlap: fejléc adatok (Location, User Status, dátumok, ISD, Account, Service, Job Role,
+Work Mode, e-mail), Tickets, Assets Awaiting Return, eszközszámláló, hiányzó dokumentum
+figyelmeztetés "📄 Create document" gombbal, Assigned assets ("+ Check out existing
+asset", "+ New asset", "↩ Return all to Stock"), tömeges sáv (Return, Handover document,
+Return document), Projects, Documents, Swaps, History (50), Own office desk.
+
+Ticket / User Status dialógus: Ticket ID, User Status, Suspended esetén Start és End
+kötelező (Start <= End), Leaver esetén End of Employment Date kötelező, Note,
+hatásleírás. Ticket vagy változás nélkül nem menthető. Ticket törölhető, a státusz és
+napló marad.
+
+================================================================================
+12. FLOORPLAN
+================================================================================
+Fejrész: + New room, officebar: Office lista (fejléccel szinkronban), + New country,
+✎ Edit country, Delete country, + New office, ✎ Edit office, Delete office.
+Szoba kártyák mini térképpel, darabszámokkal, Service-ekkel.
+"📦 At this office, not placed yet": "Move to room…".
+
+Ország: név, kód (nagybetű), egyedi. Csak üres ország és nem az utolsó törölhető.
+Iroda: Office Name, Office ID, egyedi. Törlés tiltott, ha van szobája, eszköze,
+személye, aktív shipmentje, vagy az utolsó.
+Szoba: Name, Office, Room type, Floor / building, Plan width (300-4000), Plan height
+(200-4000), Services (a Hybrid / WFH poolokhoz). Alap: 900×500.
+
+Szoba nézet: térkép rácson (20 px), oldalsáv: jelmagyarázat vagy kiválasztott objektum,
+Asset pools: Office pool, At this office not placed, Hybrid assets, WFH assets.
+Objektumok: Desk 160×90, Rack 90×150, Door 70×12. Szín: tulajdonos zöld, shared kék,
+szabad bézs, rack sötét.
+
+Szerkesztés (✎ Edit floorplan): 🪑 + Desk, 🗄️ + Rack, 🚪 + Door, 💾 Save, ✕ Cancel.
+A változások memóriában maradnak, Save ment, Cancel visszatölt. Kilépéskor rákérdez,
+oldalzáráskor figyelmeztet. Húzás 10 px-es rácsra, 90°-os forgatás, szabad helyet
+keres az új objektumnak. Panel: Label, Desk owner (– free / hot-desk –, Shared / shift,
+személy), Used by, Floor port ID, Width, Depth.
+
+Drag & drop szabályok: transit nem; site csak saját iroda; személyé csak Hybrid és csak
+asztalra (placement, nem új kiadás); WFH nem kerülhet asztalra; Onsite személyé nem;
+office és desk holder csak azonos szobán belül; raktárból nem, az alaprajz nem ad ki
+eszközt. "↩ To pool": asztalról szobapoolba.
+
+Asztal eszközlista: 📦 Return to Warehouse szerkesztés nélkül és szerkesztés közben is.
+
+================================================================================
+13. PROJECTS ÉS SHIPMENTS
+================================================================================
+Lista: Project name, Offices, Activities, Participants / demand, Pickup / deadline,
+Owner, Ticket, Status, Preparation, Note. Kereső, státusz szűrő (Active).
+
+Űrlap: Project name, Included Activities* (Shipment, Equipment Preparation, Asset
+Assignment, Replacement, több is), Project owner (datalist), Ticket ID, Project status,
+Planned pickup date, Target Service, Target location, Planned accessories, Note. Csak a
+kiválasztott tevékenységek mezői látszanak. Új projektnél a Shipment adatai megadhatók.
+Project owner alapértéke: fiókhoz kötött személy neve, különben a fiók neve.
+Tevékenység eltávolítása figyelmeztet, a rekordok maradnak, de nem számítanak.
+
+Adatlap: kártya, Completion checklist, szakaszok, Project documents, Project log.
+Lezárt projekt csak olvasható.
+
+Participants: Service, Planned pickup date, Name of the Agent, Computer, Monitor
+Serialnumber, 2nd Monitor (kézi S/N lehetséges), checklist: Keyboard, Mouse, LAN cable,
+Power cable, HDMI, Display cable, USB-B (nem leltári tétel), Other assets. Preparation
+státusz: Waiting for Erase, Erase done, Imaging, Ready. Kínálat: Working, raktár vagy
+site, nem foglalt, kiválasztott irodák.
+
+Planned demand: Asset Type, Planned quantity, Selected assets, Issued. Eszköz köthető
+személyhez (Link to person).
+
+Progress: résztvevőnként 2 + checklist tételek, demand mennyiség, kötelező shipmentek.
+
+Replacement: cél Person vagy Service.
+ Person: a személynél lévő eszközök. Return: Awaiting Return vagy Not Required, határidő.
+ Service: olyan eszköz, amelynek serviceId-ja egyezik és nem személynél, raktárban vagy
+ transitban van. Return állapot számított: raktárba kerülve Returned.
+ New asset opcionális, a lezárásig foglalt. Ticket (a projektéből), Note.
+ Mentés előtt összefoglaló. Táblázat: Target, Old asset (comes back), New asset (handed
+ over), Return. Nyitott return nem blokkolja a lezárást.
+
+Shipment: Sending/Receiving Country, Office, Person, Shipment Items, "Required for
+completing the project". Sending Person alapértéke a fiókhoz kötött személy. Csak a
+küldő iroda nem személynél lévő, nem isOut, nyitott shipmentben nem szereplő eszközei.
+Személyhez kötött eszköz nem küldhető. Személyre szóló shipment irodák nélkül is
+rögzíthető, ilyenkor nem mozdít eszközt.
+ Mark as Sent → holder transit, origin megjegyezve.
+ Record receipt → site a fogadó irodán, a officeId frissül, Received.
+ Cancel sending → vissza az eredeti helyre.
+ Eszköz a küldő irodánál számít, a transit nézetben mindkét oldalon látszik.
+ Jogok: Create és Send a küldő irodán, Receive a fogadó irodán.
+
+Lezárás (✅ Complete project): csak a kiválasztott tevékenységek számítanak, Shipment
+csak Received esetén teljesül. Hibalista megállítja és naplóz. Ellenőrzi: létezés,
+dupla kiválasztás, Working státusz, elérhetőség, más projekt foglalása, Leaver, demand
+személyhez kötése, Service-cserénél azonos iroda. Sikernél a szokásos kiadással kiadja
+az eszközöket, személyenként handover dokumentumot készít (ticket, tartozékok).
+Service-csere: az új a régi helyére kerül a Service-szel, dokumentum nélkül.
+Törlés tiltott Sent shipment mellett.
+
+================================================================================
+14. DOCUMENTS
+================================================================================
+Típusok: Handover (HO), Return (RT), Swap (SW). Szám: HO-2026-0001.
+Lista: Number, Type, Person, Date, Assets, Status, gombok: 🖨 Filled PDF, 👁 Signed, ⬇,
+⬆ Upload signed, 🗑. Szűrő: All, Awaiting signature, ✔ Signed. Figyelmeztetés a
+dokumentum nélküli eszközökről. Alul Swaps táblázat.
+
+Létrehozás a személy oldalán: Document type, eszközök, Date, Handled by (IT), Note,
+👁 Preview (nem ment), Create and open.
+Tartalom: fejléc, logó, szám, dátum, cím, átvevő, átadó, eszköztábla, Note, nyilatkozat,
+hely, aláírás. "Filled PDF" valójában HTML nyomtatási nézet: a böngésző "Save as PDF"
+funkciója készíti a PDF-et.
+A kész dokumentum megőrzi a sablon pillanatképét (tpl), a sablon későbbi módosítása
+nem változtatja meg.
+
+Aláírt másolat: PDF vagy kép, IndexedDB-be, a JSON-mentésbe is bekerül.
+
+E-aláírás: csak előkészítés. SignNow vagy Adobe Acrobat Sign kiválasztható, "Not
+connected" jelzéssel. Nem küld semmit. Valódi bekötéshez szerver kell az API-kulcsok
+miatt. A dokumentum esign mezője és az esignRequest() a csatlakozási pont.
+
+================================================================================
+15. LOGS
+================================================================================
+Csipek: All, Created, Updated, Moved, Checkout, Returned, Project activity, User status,
+Settings, darabszámmal. Szövegszűrő. Oszlopok: Time, Type, Subject, Event, By. Max. 500
+sor látszik. Helykiválasztás szerint szűr.
+
+================================================================================
+16. SETTINGS
+================================================================================
+Fülek: 🧩 Services, 👔 Job Roles, 🏠 Work Modes, 🏷️ Types & Models, 🧾 Custom Field Sets,
+📊 Dashboard, 📄 Documents, 💾 Data, 👤 User. A jogosultság rejti őket.
+
+Services: név, megjegyzés, egyedi. Törléskor a kapcsolatok kiürülnek.
+Job Roles: név, egyedi.
+Work Modes: Name, Icon, Floorplan rule. Használt mód nem törölhető.
+Types & Models: Name, Icon, Asset Name szabály, unique. System és használt típus nem
+törölhető. Modell: Asset Type (használat esetén tiltott), Model Name, kép.
+Custom Field Sets: halmaz, mezők (Field name, Field type, Options, Required), sorrend,
+Deactivate (érték megmarad), hozzárendelés típusokhoz. Több típus több halmazt kaphat.
+Dashboard: sorrend, Visible, Size (Compact, Normal, Highlighted), breakdown, Default
+filters, Aged Assets threshold, Reset.
+Documents: Company name, Address, Default IT handler name, Footer, megjelenő mezők,
+Template, Title, Statement, élő előnézet, Restore default text, e-aláírás.
+Data: JSON backup, Load JSON, importok, CSV, Load demo, Delete everything, statisztika.
+User: aktív fiók kiválasztása jelszó nélkül.
+
+================================================================================
+17. ADMIN PANEL
+================================================================================
+Fülek: 👥 Accounts, 🔐 Roles & Permissions, 👁 Permission Preview, 🎨 Branding.
+Alul mindig: "Prototype limit: accounts and permissions live in this browser, without
+passwords or a server. They keep the interface consistent but are not real security."
+
+Accounts: Username, Display name, Role, Status, Location access, Linked person.
+Az utolsó engedélyezett Superadmin nem törölhető, nem tiltható, nem fokozható le.
+Országonként és irodánként: No Access, View Only, Account role, adott szerepkör, irodánál
+"Same as country". Az irodai beállítás felülírja az országét. Bejegyzés nélkül nincs
+hozzáférés. Superadmin nem korlátozható.
+
+Roles & Permissions: mátrix. Superadmin oszlop zárolt. + New role (üresen vagy másolva),
+átnevezés, törlés (használatban tiltott), Reset built-in roles.
+
+Jogkulcsok (minden modulhoz .menu és .view, kivéve Label Printing):
+ assets: create, edit, delete, import, export, assign, move
+ people: create, edit, delete, import, status
+ floorplan: office, createRoom, edit, details, delete
+ projects: create, edit, delete, complete, shipCreate, shipSend, shipReceive
+ documents: create, upload, delete, templates
+ labels: print, presets
+ settings: services, roles, modes, types, fields, dashboard, data
+ admin: accounts, permissions, branding
+Alap: Admin minden, kivéve admin. Viewer csak menu és view, settings és admin nélkül.
+Globális kulcsok a fiók alapszerepe szerint: settings.*, admin.*, documents.templates,
+labels.presets. A többi az érintett iroda szerepe szerint dől el, tehát az eszköz
+irodája számít. Csoportos műveletnél minden érintett irodán kell a jog.
+
+Érvényesítés: a GUARDS táblázat műveletenként megadja a kulcsot, a GUARD_OFF az irodát,
+a függvényeket becsomagoljuk, az applyPerms eltávolítja a tiltott gombokat. Viewer nem
+kap szerkesztő vezérlőt.
+
+Permission Preview: szerepkör vagy fiók, Location access, Modules and actions, irodánként.
+Csak olvas.
+
+Branding: logó, Primary color, Secondary color, Corners, élő előnézet, Save, Restore
+previous, Restore default. A szövegszín automatikusan olvasható marad (4,5:1 kontraszt)
+világos és sötét módban.
+
+================================================================================
+18. CÍMKENYOMTATÁS ÉS QR
+================================================================================
+Avery L4732REV: 35,6 × 16,9 mm, 80 címke A4-en (5 × 16). Margók: top 13,3, left 11,
+pitchX 38,1, pitchY 16,9 mm, kalibrálható.
+Dialógus: Preset (Save, Save as new, Delete), mezők: QR code, Asset ID, Serial Number,
+Asset Name, Model, Asset Type; QR code content; Company logo; Logo position; élő
+előnézet; kezdőpozíció részben használt ívhez; kalibráció; "Open print preview".
+Az alap preset: QR, Serial, Name, Model.
+
+Elrendezés: a logó külön, 2,8 mm magas sorban a szöveg felett, nem vesz el szélességet.
+A betűméret a helyhez igazodik: 6,5 és 5,5 pt-ról legfeljebb 4,5 pt-ig csökken, utána
+tör, majd a teljes blokk legfeljebb 72%-ra skálázódik. Nincs csonkítás.
+
+QR-mód presetenként:
+ serial: a Serial Number. Sorozatszám nélküli eszköz nem kap címkét, ezt ki kell írni.
+ link: oldal URL + #/asset/<id>. Sorozatszám nélkül is működik. file:// esetén
+ figyelmeztet.
+QR-kódoló: byte mód, M szint, 1-10. verzió, saját Reed-Solomon, 8 maszk.
+
+Scan QR Code: BarcodeDetector + kamera, ha elérhető és HTTPS. Kézi mező mindig van.
+Feloldás pontos egyezéssel: link, Asset ID, Serial, Legacy ID, kis-nagybetű nélkül.
+Részleges egyezés nem számít. Ismeretlen: "No asset found for ...". Idegen link: "This
+QR code does not belong to an asset." Több találat: lista. Kamera elutasítva: érthető
+üzenet. Dialógus zárásakor a kamera leáll. Az oldal jogosultsági kapuja érvényes marad.
+
+================================================================================
+19. IMPORT, EXPORT, MENTÉS, TOUR, DEMO ADATOK
+================================================================================
+Eszközimport (#/import): Excel vagy CSV, Snipe-IT exporttal is. Lépések: fájl, oszlopok
+párosítása (automatikus felismerés magyar és angol nevekkel), kötelező Country + City /
+Office cél, előnézet (New, Skip – S/N exists, Empty row, Error – skip).
+Mezők: Legacy ID, Asset Type, Manufacturer, Model, Serial Number, Status, Holder /
+location, Person e-mail, Service, Location, Country, City / Office, Order arrived, Warranty
+end, Warranty (months), Supplier, Order / invoice, Note.
+Hibás sor: ismeretlen vagy eltérő iroda/ország, más irodához tartozó hely, más országban
+dolgozó személy. Ismeretlen típus és modell létrejön, ismeretlen személy opcionálisan.
+Holder szöveg: üres = raktár, név/e-mail, "Szoba / Asztal", "Office: szobanév".
+CSV: elválasztó felismerése (; tab ,), UTF-8, majd windows-1250. Dátumok: Excel-szám,
+ÉÉÉÉ.HH.NN, NN/HH/ÉÉÉÉ. Sablon letölthető .xlsx és CSV formában, Guide munkalappal.
+
+Személyimport (#/people/import): Full Name, Service, Work Mode. Cél iroda, alapértelmezett
+mód, ismeretlen Service kezelése (létrehozás, párosítás, kihagyás), meglévő név kihagyása,
+előnézet. Elfogadott írásmódok: office, irodai, hibrid, home office, remote stb.
+
+CSV-export: kiválasztott hely eszközei, pontosvessző, BOM, egyedi mezőkkel.
+
+JSON: teljes adat + aláírt fájlok base64-ben. Visszatöltés felülír.
+Load demo, Delete everything: megerősítéssel.
+
+Tour: 21 lépés, demo adaton fut, a valódi adat mentve és visszaállítva, bezáráskor is.
+Vezérlők: szünet, következő, leállítás. Dialógusok automatikusan válaszolnak.
+
+Demo adatok:
+ Hungary (Debrecen Office DEB, Budapest Office BUD), Poland (Poland Office PLO).
+ Services: Customer Support, IT Support, Finance, Development.
+ Roles: Agent, TeamLeader, Developer, IT Specialist.
+ 9 magyar személy (Kiss Péter, Nagy Anna, Tóth Gábor, Szabó Eszter, Horváth Dávid,
+ Varga Júlia, Molnár Tamás, Kovács Bence, Farkas Lili) és Nowak Anna (Poland).
+ Szobák: 2.12 Development Office, 1.04 Customer Support, 0.01 Server Room; Budapest:
+ Meeting Room, IT Room, Office 1; Poland: Main Office.
+ Fiókok: superadmin, it.admin, viewer, poland.admin.
+ Mintegy 50 eszköz minden holder-típussal, lejáró garancia, Faulty, Aged, Lost, Missing.
+ Field setek: Monitor_Fields, Computer_Fields, Phone_Fields.
+ Projektek: Customer Support – November joiners; Five new joiners – preparation;
+ Debrecen to Budapest – spare equipment.
+
+================================================================================
+20. BEFEJEZENDŐ: PDF-SABLONOK (9. PONT) ÉS NYITOTT DÖNTÉSEK
+================================================================================
+20.1 Előfeltétel, ezzel kell kezdeni
+Szükséges fájlok az it-raktar/vendor/ mappába:
+  pdf.min.js, pdf.worker.min.js   pdfjs-dist@3.11.174 (megjelenítés, ~1,3 MB)
+  pdf-lib.min.js                  pdf-lib@1.17.1 (PDF írása, ~0,5 MB)
+  jsQR.js (opcionális)            jsqr@1.4.0 (QR-olvasás, ha nincs BarcodeDetector)
+A letöltést a jogosultsági rendszer tiltotta, ezt nem szabad megkerülni. Lehetőségek:
+a felhasználó engedélyezi, vagy kézzel beteszi a fájlokat.
+A futás közbeni CDN-betöltés is lehetséges lenne (az xlsx már így működik), de
+böngészőben nem tudtuk tesztelni, ezért csak a felhasználó döntése után.
+
+20.2 Követelmények a spec szerint
+Settings → Documents bővítése. A meglévő Documents funkciók maradnak.
+Sablonkezelés: PDF feltöltése, név, leírás, lista, előnézet, mezők beállítása, mentés,
+frissítés vagy csere úgy, hogy a korábbi dokumentumok ne sérüljenek.
+Mezők: Recipient Name, Service, Date, Asset Name, Asset ID, Serial Number, Model, Notes,
+Signature mező ha megvalósítható. Csak valóban kitölthető mező legyen.
+Vizuális elhelyezés, kézi koordináták nélkül: mező hozzáadása, adat kiválasztása,
+elhelyezés, megjelenés módosítása, előnézet, mentés. Több eszköznél táblázat több sorral.
+Generálás: valódi adatok, valódi PDF, előnézet, letöltés, nyomtatás. Az eredeti sablon
+marad. Szöveg nem fedhet és nem lóghat ki. Hosszú nevek és sorozatszámok jól jelenjenek
+meg. A régi dokumentum maradjon összhangban a sablonverziójával. Ne legyen olyan előnézet,
+ami nem tud valódi dokumentumot előállítani.
+
+20.3 Javasolt megvalósítás (már kigondolt terv)
+Új fájl: js/pdfdocs.js, az auth.js előtt betöltve. A könyvtárak csak szükség esetén
+töltődnek (mint a loadXLSX).
+Adat: db.pdfTemplates[] {id, name, desc, kind: out|in|swap|any, currentV,
+ versions[{v, fileId, createdAt, fields[]}]}.
+ Mező: {id, key, page, x, y, w, h (a laphoz viszonyított arány), size, align}.
+ A PDF-bináris IndexedDB-ben. Új fájl feltöltése új verzió, a régi megmarad.
+Dokumentum: createDoc után d.pdf = {tplId, v, fileId}: a generált PDF is IndexedDB-be
+ kerül, így a régi dokumentum nem változik. A deleteDoc törölje.
+Mentés: az exportJSON most csak az aláírt fájlokat viszi, ezt bővíteni kell a sablon-
+ és generált fájlokkal, különben a mentésből hiányoznának.
+Tervező: #/settings/docs/<tplId>, pdf.js canvasra rajzol oldalanként, rajta húzható és
+ méretezhető dobozok pointer eseményekkel, oldalsó mezőlista.
+Kitöltés: a pdf-lib alapbetűi nem kezelik az ő, ű, ł, ą betűket. Ezért minden mezőt a
+ böngésző canvasával kell képpé rajzolni (kb. 4× felbontás, átlátszó háttér), és PNG-ként
+ beágyazni. Nem kell külön betűkészlet. Hátrány: a szöveg nem kijelölhető, ezt jelezni kell.
+ A kitöltő sortör és csökkenti a méretet a dobozon belül, minimum 6 pt alatt figyelmeztet.
+ Több eszköznél: az egyes mezőknél vesszővel, az assetTable mezőnél sorokban. Ami nem fér
+ el, plusz oldalra kerül.
+ Swap dokumentumnál a szerepek (in, out) feltüntetendők.
+Használat: docDialog "Template" lista (beépített vagy PDF-sablon), Preview ugyanazzal a
+ kóddal valódi PDF-et készít mentés nélkül. Filled PDF: ha van generált fájl, azt nyitja,
+ letöltés és nyomtatás a böngésző PDF-nézőjével.
+Jogosultság: documents.templates (globális) a sablonkezeléshez.
+A Tourt és az Update listát is frissíteni kell.
+
+20.4 Elfogadási feltételek
+ - PDF-sablon feltölthető és konfigurálható.
+ - A mezők elhelyezése menthető, frissítés után megmarad.
+ - A kitöltött PDF ténylegesen előáll és letölthető, magyar és lengyel betűkkel is.
+ - Sablon cseréje után a régi dokumentum változatlan.
+ - JSON-mentés és visszatöltés után a sablonok és PDF-ek megvannak.
+ - Egy Worddel készült, valódi PDF-en is ki kell próbálni.
+ - Ellenőrzés: a kimenetet pdf.js-sel vissza kell rajzolni és megnézni.
+
+20.5 Nyitott döntések a felhasználónak
+ - Országon belüli kiadás másik irodába: most Shipment nélkül engedélyezett. Maradjon?
+ - Tömeges eszközátsorolás irodák között a kezdeti feltöltéshez: most csak Shipment van.
+ - Link QR telefonon és közös adatok: szervert igényel.
+
+================================================================================
+21. ISMERT HIBÁK ÉS KORLÁTOK
+================================================================================
+Javítandó kis hibák (a kódban megtalálhatók, még nincsenek javítva):
+ - Tour, Admin Panel lépés: a szövegben még "Visitor" szerepel, "Viewer" helyett.
+ - Eszközimport: a parseStatus a Faulty és Missing értéket nem ismeri. A "Faulty"
+   Working lesz, a "broken" In Repair. Bővíteni kell.
+ - A sablon Guide munkalapján a Status felsorolásból hiányzik a Missing.
+
+Technikai korlátok:
+ - Jelszó és valódi bejelentkezés nincs, a fiókváltás szabad, tehát nincs valódi védelem.
+ - Az adatok böngészőnként külön vannak, közös használat csak JSON-átadással lehet.
+ - A localStorage körülbelül 5 MB, a sok kép ezt kimerítheti.
+ - A napló nem hamisíthatatlan audit, és legfeljebb 8000 bejegyzés.
+ - Irodánként egy In Stock készlet van. A Storage room szoba cél lehet, de szobaként számít.
+ - Az Asset ID a lengyel eszközöknél is HU előtagú.
+ - A QR-link telefonon "Asset not found", ha ott nincs meg az adat.
+ - A kamerás beolvasás a BarcodeDetector nélküli böngészőben nem működik.
+ - A Service-hez rendelés csak kapcsolat, a helyet nem változtatja.
+ - E-aláírás csak előkészítés.
+ - A Dashboard Office alapszűrője szobára vonatkozik, nem irodára.
+
+Nem tesztelt területek: valódi egeres húzás a Floorplanon, .xlsx import (CSV tesztelve),
+file:// megnyitás, valódi címkenyomtatás, kamerás QR telefonon, a felhasználó saját adatai.
+
+================================================================================
+22. ELLENŐRZÉSI LISTA ÚJRAÉPÍTÉS UTÁN
+================================================================================
+Tesztelés: böngészőben, a demo adatokon, ideiglenes tesztszkripttel, amit a végén törölni
+kell. Rejtett panelben a timerek lassulnak, ezért MessageChannel-alapú várakozás kell.
+
+ Adat:      migrate idempotens; régi adatból nem vész el semmi; demo betölt.
+ Hely:      HU és PL külön; All Offices egy ország; közvetlen link kapuja működik.
+ Assets:    szűrők, oszlopok, sorrend, nézetek megmaradnak; rejtett szűrő látszik és
+            hat; szavas keresés; 1024 px-en nincs vízszintes görgetés.
+ Lista:     7+ elemű select minden oldalon kereshető; billentyűzet; üres üzenet; Esc
+            a dialógust nem zárja be.
+ Varázsló:  ütközés felismerése; pipa nélkül nem ír felül; részleges eredmény okkal;
+            dupla kattintás egyszer fut; transit és preparing blokkolt.
+ Mozgatás:  Shipment nem kerülhető meg; Return to Warehouse tiszta állapotot hagy, az
+            adatlapról, a Floorplanról és szerkesztés közben is.
+ Csere:     összefoglaló mentés előtt; Person és Service cél; return követhető.
+ Projekt:   lezárás szabályai; Shipment küldés, átvétel, visszavonás; jogok irodánként.
+ Overview:  számok egyeznek a listákkal; Awaiting csak valódi; widgetek fiókonként.
+ Címke:     hosszú értékek nem csonkulnak; logó nem fed; QR-módok.
+ Scan:      link, serial, tag, hibás érték, duplikátum, kézi keresés.
+ Jog:       Viewer nem kap szerkesztő gombot; művelet konzolból is tiltott.
+ Nyelv:     nincs magyar felirat a felületen, a neveket kivéve.
+ Végén:     konzolhiba nincs; Tour lefut és visszaállítja az adatot; tesztfájl törölve;
+            az it-raktar és a feltoltes azonos.
+
+Feltöltés: a feltoltes mappa tartalma a GitHub-repóba, utána Ctrl+F5. Előtte JSON-mentés.
+================================================================================
