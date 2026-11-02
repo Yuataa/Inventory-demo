@@ -196,7 +196,8 @@ function objPanel(o, ed){
   const ownerVal = o.personId || (o.shared ? 'shared' : '');
   const list = as.length ? as.map(a => `<div class="item">${assetIcon(a)} <div style="flex:1"><a class="tag" href="#/asset/${a.id}">${esc(a.tag)}</a>
       <br><small class="muted">${esc(typeLabel(a.type))} · ${esc(modelName(a))}${a.placement ? ` · <span style="color:var(--hybrid)">Hybrid – ${esc((person(a.holder.id) || {}).name || '')}</span>` : ''}</small></div>
-      ${ed ? `<button class="sm" onclick="dropToPool(asset('${a.id}'))" title="${a.placement ? 'Remove from the desk (stays with the person)' : 'Back to the office pool'}">↩ To pool</button>` : ''}</div>`).join('')
+      <div class="toolbar" style="justify-content:flex-end">${ed ? `<button class="sm" onclick="dropToPool(asset('${a.id}'))" title="${a.placement ? 'Remove from the desk (stays with the person)' : 'Back to the office pool'}">↩ To pool</button>` : ''}
+      <button class="sm" onclick="returnToWarehouse('${a.id}')" title="Take it off the desk and put it back in stock">📦 Return to Warehouse</button></div></div>`).join('')
     : '<p class="muted">No assets.</p>';
   return head(isRack ? '🗄️' : '🪑', isRack ? 'Rack / cabinet' : 'Desk') + (ed ? `
     <label class="f">Label</label><input data-f="label" value="${esc(o.label)}">

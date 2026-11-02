@@ -21,7 +21,7 @@ function filterAssets(P){
   if (f('health') === 'both') list = list.filter(a => isFaulty(a) && isAged(a));
   if (f('age')) list = list.filter(a => (ageYears(a) ?? -1) >= +f('age'));
   if (f('warr')) list = list.filter(a => { const w = warranty(a), x = f('warr'); return x === 'none' ? w.days === null : x === 'bad' ? w.days !== null && w.days < 0 : w.days !== null && w.days >= 0 && w.days <= 60; });
-  if (f('q')){ const n = norm(f('q')); list = list.filter(a => norm([a.tag, a.legacyTag, a.name, modelName(a), a.serial, a.note, a.supplier, a.orderNo, whereText(a), Object.values(a.custom || {}).join(' ')].join(' ')).includes(n)); }
+  if (f('q')) list = list.filter(a => matchWords([a.tag, a.legacyTag, a.name, modelName(a), typeLabel(a.type), a.serial, a.note, a.supplier, a.orderNo, whereText(a), officeLabel(a.officeId), serviceName(a.serviceId), Object.values(a.custom || {}).join(' ')].join(' '), f('q')));
   return list;
 }
 function typeBreak(list, query){
@@ -79,11 +79,46 @@ function dashSection(id){
     return `<h2>WFH / Hybrid people</h2>` + (list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Service</th><th>Work Mode</th><th>Assets</th></tr></thead><tbody>${list.map(p =>
       `<tr><td>${personLink(p.id)}</td><td>${esc(serviceName(p.serviceId))}</td><td>${modePill(p.mode)}</td><td>${personAssets(p.id).direct.map(a => `<a class="chip" href="#/asset/${a.id}">${typeIcon(a.type)} ${esc(a.tag)}</a>`).join(' ') || '<span class="muted">–</span>'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Nobody in these modes.</div>');
   }
+  if (id === 'activeList'){
+    const list = sortHu(scopedProjects().filter(isActive), pr => pr.pickupDate || '9999');
+    return `<h2>Active Projects (${list.length})</h2>` + (list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Project Name</th><th>Status</th><th>Project Owner</th><th>Progress</th></tr></thead><tbody>${list.slice(0, 8).map(pr => { const n = projectProgress(pr);
+      return `<tr><td><a href="#/project/${pr.id}">${esc(pr.name)}</a></td><td>${projectStatusPill(pr.status)}</td><td>${esc(pr.owner) || '<span class="muted">–</span>'}</td><td data-v="${n}"><div class="progress" title="${n}%"><i style="width:${n}%"></i></div><small class="muted">${n}%</small></td></tr>`; }).join('')}</tbody></table></div>${list.length > 8 ? '<p><a href="#/projects?status=active">All active projects ›</a></p>' : ''}` : '<div class="empty">No active projects.</div>');
+  }
+  if (id === 'awaitList'){
+    // only real return records count: being assigned to a person does not mean an asset is expected back
+    const ids = new Set(scopedAssets(true).map(a => a.id)), by = new Map();
+    for (const r of db.returns) if (r.state === 'awaiting' && ids.has(r.assetId)) by.set(r.personId, [...(by.get(r.personId) || []), r]);
+    const rows = sortHu([...by], ([pid]) => (person(pid) || {}).name || '');
+    return `<h2>Awaiting Returns (${rows.length})</h2>` + (rows.length ? `<div class="tbl-wrap"><table><thead><tr><th>Person</th><th>Assets</th><th>Summary</th><th>Return State</th></tr></thead><tbody>${rows.map(([pid, rs]) => {
+      const as = rs.map(r => asset(r.assetId)).filter(Boolean), late = rs.some(returnOverdue), due = rs.map(returnDue).filter(Boolean).sort()[0];
+      return `<tr><td>${personLink(pid)}</td><td><a href="#/assets?view=awaiting&person=${pid}"><b>${as.length}</b></a></td><td>${as.map(a => `<a class="chip" href="#/asset/${a.id}" title="${esc(assetName(a))}">${typeIcon(a.type)} ${esc(a.tag)}</a>`).join(' ')}</td>
+        <td><span class="pill ${late ? 'bad' : due ? 'warn' : ''}">${late ? 'Overdue' : 'Awaiting Return'}</span> <small class="muted">${due ? 'due ' + esc(due) : 'No deadline set'}</small></td></tr>`; }).join('')}</tbody></table></div>` : '<div class="empty">No returns are expected.</div>');
+  }
+  if (id === 'equip'){
+    // only assets held by a person directly; stock and office assets are not anyone's equipment
+    const rows = scopedPeople().map(p => [p, personAssets(p.id).direct]).filter(x => x[1].length).sort((a, b) => b[1].length - a[1].length || String(a[0].name).localeCompare(b[0].name, 'hu'));
+    return `<h2>Equipment by Person (${rows.length})</h2>` + (rows.length ? `<div class="tbl-wrap"><table><thead><tr><th>Person</th><th>Service</th><th>In Use</th><th>Needs Attention</th></tr></thead><tbody>${rows.slice(0, 10).map(([p, as]) => {
+      const inUse = as.filter(isActiveAsset), bad = as.filter(a => !isActiveAsset(a)), types = [...new Set(inUse.map(a => a.type))];
+      return `<tr><td>${personLink(p.id)}</td><td>${esc(serviceName(p.serviceId)) || '<span class="muted">–</span>'}</td>
+        <td data-v="${inUse.length}">${types.map(t => `<a class="tchip" href="#/assets?person=${p.id}&type=${encodeURIComponent(t)}" title="${esc(typeLabel(t))}">${typeIcon(t)} <b>${inUse.filter(a => a.type === t).length}</b> <span>${esc(typeLabel(t))}</span></a>`).join(' ') || '<span class="muted">–</span>'}</td>
+        <td data-v="${bad.length}">${bad.map(a => `<a href="#/asset/${a.id}" title="${esc(a.tag)}">${statusPill(a.status)}</a>`).join(' ') || '<span class="muted">–</span>'}</td></tr>`; }).join('')}</tbody></table></div>${rows.length > 10 ? `<p><a href="#/assets?view=assigned">All ${rows.length} people's assets ›</a></p>` : ''}` : '<div class="empty">Nobody holds an asset directly.</div>');
+  }
+  if (id === 'moves') return `<h2>Recent Asset Movements</h2>${logTable(scopedLog().filter(l => ['moved', 'checkout', 'returned'].includes(l.cat)).slice(0, 8))}`;
   return `<h2>Recent events</h2>${logTable(scopedLog().slice(0, 8))}`;
 }
+// the admin's Settings decide the default; each account can show or hide widgets for itself
+const dashShown = it => { const o = (myPrefs().dash || {})[it.id]; return o === undefined ? it.visible : o; };
+function customizeOverview(){
+  const items = db.settings.dashboard.items;
+  openDialog(`<h3>Customize Overview</h3><p class="muted" style="margin-top:0">Choose what you see. This applies to your account only.</p>
+    <div class="cfg-grid">${items.map(i => `<label class="cb"><input type="checkbox" name="w_${i.id}"${dashShown(i) ? ' checked' : ''}> ${esc(DASH_ITEMS[i.id])}</label>`).join('')}</div>
+    <div class="actions"><button type="button" id="dashReset" style="margin-right:auto">Reset to default</button><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok" id="dlgOk">Save</button></div>`,
+    data => { myPrefs().dash = Object.fromEntries(items.map(i => [i.id, !!data['w_' + i.id]])); save(); render(); });
+  $('#dashReset').addEventListener('click', () => { delete myPrefs().dash; save(); $('#dlg').close(); render(); toast('Overview reset to the default.'); });
+}
 function viewDashboard(){
-  const items = db.settings.dashboard.items.filter(i => i.visible);
-  return `<div class="row"><h1>Overview</h1><span class="spacer"></span><a class="btn sm" href="#/settings/dashboard">⚙ Customize</a></div>
+  const items = db.settings.dashboard.items.filter(dashShown);
+  return `<div class="row"><h1>Overview</h1><span class="spacer"></span><button class="sm" onclick="customizeOverview()">⚙ Customize Overview</button><a class="btn sm" href="#/settings/dashboard">Default layout</a></div>
     <div class="sub">The state of all IT assets at a glance. Click a number to open the filtered list.</div>
     <div class="dash">${items.filter(i => !DASH_SECTIONS.includes(i.id)).map(dashTile).join('')}</div>
     ${items.filter(i => DASH_SECTIONS.includes(i.id)).map(i => dashSection(i.id)).join('')}`;
@@ -91,6 +126,82 @@ function viewDashboard(){
 
 // ---------- asset list ----------
 const LOC_LABEL = {desk:'🪑 On a desk / in a rack', office:'🏢 In a room pool', site:'🏢 At an office, not placed', transit:'🚚 In transit', person:'👤 Assigned to a person', storage:'📦 In Stock'};
+const ASSET_FILTERS = {view:'View', type:'Asset Type', model:'Model', office:'Office', room:'Room', person:'Employee', service:'Service', mode:'Work Mode', loc:'Location', status:'Status', warr:'Warranty'};
+const DEFAULT_FILTERS = ['type', 'office', 'person', 'status'];
+const shownFilters = () => myPrefs().filters || DEFAULT_FILTERS;
+const shownCols = () => (myPrefs().cols || DEFAULT_COLS).filter(c => ASSET_COLS[c]);
+const ASSETS_SORT = 'assets#0';
+const WARR_TEXT = {soon:'Expires within 60 days', bad:'Expired', none:'Not set'}, HEALTH_TEXT = {faulty:'Faulty', aged:'Aged', both:'Faulty and Aged'};
+function filterValue(k, v){
+  return {view:() => (ASSET_VIEWS[v] || {}).title, type:() => typeLabel(v), model:() => (model(v) || {}).name, office:() => officeLabel(v), room:() => (room(v) || {}).name, person:() => (person(v) || {}).name, service:() => serviceName(v),
+    mode:() => modeName(v), loc:() => LOC_LABEL[v], status:() => v === 'active' ? 'Active only' : (STATUS[v] || {}).label, warr:() => WARR_TEXT[v], health:() => HEALTH_TEXT[v], age:() => v + '+ years'}[k]?.() || v;
+}
+// every active filter is listed here, also the ones hidden in Customize View, so nothing narrows the list unseen
+function activeFilterChips(params){
+  const shown = shownFilters(), out = [];
+  for (const [k, v] of params){
+    if (k === 'q') continue;
+    const hidden = ASSET_FILTERS[k] && !shown.includes(k), rest = new URLSearchParams(params); rest.delete(k);
+    if (k === 'view'){ rest.delete('health'); rest.delete('age'); }
+    out.push(`<a class="fchip${hidden ? ' hid' : ''}" href="#/assets${rest.toString() ? '?' + rest : ''}" title="${hidden ? 'This filter is hidden in Customize View but still applied. ' : ''}Click to remove">${esc(ASSET_FILTERS[k] || {health:'Category', age:'Age'}[k] || k)}: <b>${esc(filterValue(k, v))}</b>${hidden ? ' <small>(hidden filter)</small>' : ''} ✕</a>`);
+  }
+  return out.length ? `<div class="row fchiprow"><span class="muted">Active filters:</span>${out.join('')}<a href="#/assets">Clear all</a></div>` : '';
+}
+function builtinViews(){
+  const p = currentPerson();
+  return [...(p && p.officeId ? [{id:'b_office', name:'My Office', query:'office=' + p.officeId}] : []), {id:'b_warr', name:'Warranty Expired', query:'warr=bad'}, {id:'b_ret', name:'Awaiting Returns', query:'view=awaiting'}, {id:'b_faulty', name:'Faulty Assets', query:'view=health&health=faulty'}];
+}
+function applySavedView(id){
+  const v = builtinViews().find(x => x.id === id) || (myPrefs().views || []).find(x => x.id === id);
+  if (!v) return;
+  if (v.cols){ myPrefs().cols = v.cols.filter(c => ASSET_COLS[c]); save(); }
+  const cols = shownCols();
+  sortState[ASSETS_SORT] = (v.sort || []).map(s => ({i:cols.indexOf(s.c) + 2, dir:s.dir})).filter(s => s.i >= 2);
+  const hash = '#/assets' + (v.query ? '?' + v.query : '');
+  if (location.hash === hash) render(); else location.hash = hash;
+}
+function currentViewData(){
+  const cols = shownCols();
+  return {query:location.hash.split('?')[1] || '', cols, sort:(sortState[ASSETS_SORT] || []).map(s => ({c:cols[s.i - 2], dir:s.dir})).filter(s => s.c)};
+}
+function customizeView(){
+  const filters = shownFilters(), cols = shownCols(), order = [...cols, ...Object.keys(ASSET_COLS).filter(c => !cols.includes(c))];
+  const views = () => (myPrefs().views || []).map(v => `<div class="locrow"><span>${esc(v.name)}</span><button type="button" class="sm danger" data-delview="${v.id}">Delete</button></div>`).join('') || '<p class="muted">No saved views yet.</p>';
+  openDialog(`<h3>Customize View</h3>
+    <h4>Search Filters</h4><div class="cfg-grid">${Object.entries(ASSET_FILTERS).map(([k, l]) => `<label class="cb"><input type="checkbox" data-filter="${k}"${filters.includes(k) ? ' checked' : ''}> ${esc(l)}</label>`).join('')}</div>
+    <h4>Table Columns</h4><p class="muted" style="margin:0 0 6px">Only the display changes, never the asset data. Use the arrows to change the order.</p>
+    <div class="checklist" id="cvCols">${order.map(c => `<div class="cvcol" data-col="${c}"><label class="cb"><input type="checkbox"${cols.includes(c) ? ' checked' : ''}> ${esc(ASSET_COLS[c].label)}</label><span class="spacer"></span><button type="button" class="sm" data-up aria-label="Move ${esc(ASSET_COLS[c].label)} up">↑</button><button type="button" class="sm" data-down aria-label="Move ${esc(ASSET_COLS[c].label)} down">↓</button></div>`).join('')}</div>
+    <h4>Saved Views</h4><p class="muted" style="margin:0 0 6px">A saved view keeps the current filters, the columns chosen here, their order and the sorting.</p>
+    <div id="cvViews">${views()}</div>
+    <div class="row" style="margin-top:6px"><input id="cvName" placeholder="View name, e.g. My Office" style="flex:1;min-width:180px" aria-label="View name"><button type="button" id="cvSave">Save as view</button></div>
+    <div class="actions"><button type="button" id="cvReset" style="margin-right:auto">Reset to defaults</button><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok" id="dlgOk">Apply</button></div>`,
+    () => {
+      const cs = readCols();
+      if (!cs.length){ alert('Keep at least one column.'); return false; }
+      if (cs.join() !== cols.join()) delete sortState[ASSETS_SORT];
+      Object.assign(myPrefs(), {filters:[...document.querySelectorAll('[data-filter]:checked')].map(b => b.dataset.filter), cols:cs});
+      save(); render();
+    }, {wide:true});
+  const readCols = () => [...document.querySelectorAll('#cvCols .cvcol')].filter(d => d.querySelector('input').checked).map(d => d.dataset.col);
+  $('#cvCols').addEventListener('click', e => {
+    const d = e.target.closest('.cvcol'); if (!d) return;
+    if ('up' in e.target.dataset && d.previousElementSibling) d.parentNode.insertBefore(d, d.previousElementSibling);
+    if ('down' in e.target.dataset && d.nextElementSibling) d.parentNode.insertBefore(d.nextElementSibling, d);
+  });
+  $('#cvReset').addEventListener('click', () => { const p = myPrefs(); delete p.filters; delete p.cols; delete sortState[ASSETS_SORT]; save(); $('#dlg').close(); render(); toast('Filters and columns reset to the defaults.'); });
+  $('#cvSave').addEventListener('click', () => {
+    const name = $('#cvName').value.trim(), cs = readCols(), p = myPrefs();
+    if (!name){ alert('Enter a name for the view.'); return; }
+    if (!cs.length){ alert('Keep at least one column.'); return; }
+    if ((p.views || []).some(v => norm(v.name) === norm(name)) || builtinViews().some(v => norm(v.name) === norm(name))){ alert('A view with this name already exists.'); return; }
+    (p.views ||= []).push({id:uid(), name, ...currentViewData(), cols:cs});
+    save(); $('#cvName').value = ''; $('#cvViews').innerHTML = views(); toast('View saved.');
+  });
+  $('#cvViews').addEventListener('click', e => {
+    const id = e.target.dataset.delview; if (!id) return;
+    const p = myPrefs(); p.views = p.views.filter(v => v.id !== id); save(); $('#cvViews').innerHTML = views();
+  });
+}
 function viewAssets(params){
   const f = k => params.get(k) || '';
   const list = sortHu(filterAssets(params), a => a.tag), V = ASSET_VIEWS[f('view')], type = f('type'), mdl = f('model');
@@ -99,47 +210,55 @@ function viewAssets(params){
   const title = V ? V.title : mdl && model(mdl) ? model(mdl).name : type ? typeLabel(type) : 'Assets';
   const opt = (v, cur, l) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${l}</option>`;
   const q = new URLSearchParams(params); q.delete('type'); q.delete('model');
+  const saved = [...builtinViews(), ...(myPrefs().views || [])];
+  const selects = {
+    view:`<select id="fview" title="View" aria-label="View"><option value="">All assets</option>${Object.entries(ASSET_VIEWS).map(([k, x]) => opt(k, f('view'), x.title)).join('')}</select>`,
+    type:`<select id="ftype" title="Asset Type" aria-label="Asset Type"><option value="">All types</option>${sortHu(db.types, t => t.name).map(t => opt(t.id, type, `${t.icon} ${esc(t.name)}`)).join('')}</select>`,
+    model:`<select id="fmodel" title="Model" aria-label="Model"><option value="">All models</option>${models.map(m => opt(m.id, mdl, esc(m.name))).join('')}</select>`,
+    office:`<select id="foffice" title="Office" aria-label="Office"><option value="">All Offices</option>${offs.map(o => opt(o.id, f('office'), esc(o.name))).join('')}</select>`,
+    room:`<select id="froom" title="Room" aria-label="Room"><option value="">All Rooms</option>${sortHu(db.rooms.filter(r => offs.some(o => o.id === r.officeId) && (!f('office') || r.officeId === f('office'))), r => roomPath(r)).map(r => opt(r.id, f('room'), esc(roomPath(r)))).join('')}</select>`,
+    person:`<select id="fperson" title="Employee" aria-label="Employee"><option value="">All employees</option>${sortHu(scopedPeople(), p => p.name).map(p => opt(p.id, f('person'), esc(p.name))).join('')}</select>`,
+    service:`<select id="fsvc" title="Service" aria-label="Service"><option value="">All Services</option>${sortHu(db.services, s => s.name).map(s => opt(s.id, f('service'), esc(s.name))).join('')}</select>`,
+    mode:`<select id="fmode" title="Work Mode" aria-label="Work Mode"><option value="">All Work Modes</option>${db.modes.map(m => opt(m.id, f('mode'), `${m.icon} ${esc(m.name)}`)).join('')}</select>`,
+    loc:`<select id="floc" title="Location" aria-label="Location"><option value="">Anywhere</option>${Object.entries(LOC_LABEL).map(([k, v]) => opt(k, f('loc'), v)).join('')}</select>`,
+    status:`<select id="fstatus" title="Status" aria-label="Status"><option value="">All statuses</option>${opt('active', f('status'), 'Active only')}${Object.entries(STATUS).map(([k, s]) => opt(k, f('status'), s.label)).join('')}</select>`,
+    warr:`<select id="fwarr" title="Warranty" aria-label="Warranty"><option value="">Warranty: all</option>${opt('soon', f('warr'), WARR_TEXT.soon)}${opt('bad', f('warr'), WARR_TEXT.bad)}${opt('none', f('warr'), WARR_TEXT.none)}</select>`,
+  };
   return `
     <div class="row"><h1>${!V && type ? typeIcon(type) + ' ' : ''}${esc(title)}</h1><span class="spacer"></span>
+      <button onclick="scanDialog()">📷 Scan QR Code</button>
+      <button onclick="customizeView()">⚙ Customize View</button>
       <button onclick="exportCSV()">⬇ CSV</button>
       <a class="btn" href="#/import">⬆ Import (Excel / Snipe-IT)</a>
       <button class="primary" onclick="assetForm(null, null, '${esc(type)}')">+ New asset</button></div>
     <div class="sub" id="assetCounts">${list.length} shown · <b>${all.filter(isActiveAsset).length}</b> active · <a href="#/assets?status=lost">${all.filter(a => a.status === 'lost').length} Lost</a> · <a href="#/assets?status=missing">${all.filter(a => a.status === 'missing').length} Missing</a> · <a href="#/assets?view=health&health=faulty">${all.filter(isFaulty).length} Faulty</a>${filtered ? ' · <a href="#/assets">clear filters</a>' : ''}</div>
     ${V ? typeBreak(filterAssets(q), q.toString()) : ''}
     <div class="row filters" style="margin-bottom:12px">
-      <input id="fq" placeholder="Filter: Asset ID, name, S/N, model…" value="${esc(f('q'))}" style="min-width:220px">
-      <select id="fview" title="View"><option value="">All assets</option>${Object.entries(ASSET_VIEWS).map(([k, x]) => opt(k, f('view'), x.title)).join('')}</select>
-      <select id="ftype" title="Asset Type"><option value="">All types</option>${sortHu(db.types, t => t.name).map(t => opt(t.id, type, `${t.icon} ${esc(t.name)}`)).join('')}</select>
-      <select id="fmodel" title="Model"><option value="">All models</option>${models.map(m => opt(m.id, mdl, esc(m.name))).join('')}</select>
-      <select id="foffice" title="Office"><option value="">All Offices</option>${offs.map(o => opt(o.id, f('office'), esc(o.name))).join('')}</select>
-      <select id="froom" title="Room"><option value="">All Rooms</option>${sortHu(db.rooms.filter(r => offs.some(o => o.id === r.officeId) && (!f('office') || r.officeId === f('office'))), r => roomPath(r)).map(r => opt(r.id, f('room'), esc(roomPath(r)))).join('')}</select>
-      <select id="fperson" title="Employee"><option value="">All employees</option>${sortHu(scopedPeople(), p => p.name).map(p => opt(p.id, f('person'), esc(p.name))).join('')}</select>
-      <select id="fsvc" title="Service"><option value="">All Services</option>${sortHu(db.services, s => s.name).map(s => opt(s.id, f('service'), esc(s.name))).join('')}</select>
-      <select id="fmode" title="Work Mode"><option value="">All Work Modes</option>${db.modes.map(m => opt(m.id, f('mode'), `${m.icon} ${esc(m.name)}`)).join('')}</select>
-      <select id="floc" title="Location"><option value="">Anywhere</option>${Object.entries(LOC_LABEL).map(([k, v]) => opt(k, f('loc'), v)).join('')}</select>
-      <select id="fstatus" title="Status"><option value="">All statuses</option>${opt('active', f('status'), 'Active only')}${Object.entries(STATUS).map(([k, s]) => opt(k, f('status'), s.label)).join('')}</select>
-      <select id="fwarr" title="Warranty"><option value="">Warranty: all</option>${opt('soon', f('warr'), 'Expires within 60 days')}${opt('bad', f('warr'), 'Expired')}${opt('none', f('warr'), 'Not set')}</select>
+      <input id="fq" type="search" placeholder="Search: Asset ID, name, S/N, model, person…" value="${esc(f('q'))}" aria-label="Search assets" style="min-width:260px;flex:1">
+      ${Object.keys(ASSET_FILTERS).filter(k => shownFilters().includes(k)).map(k => selects[k]).join('')}
+      <select id="fsaved" title="Saved views" aria-label="Saved views"><option value="">Saved views…</option>${saved.map(v => `<option value="${v.id}">${esc(v.name)}</option>`).join('')}</select>
       ${f('view') === 'health' ? `<select id="fhealth" title="Category"><option value="">Faulty or Aged</option>${opt('faulty', f('health'), 'Faulty')}${opt('aged', f('health'), 'Aged')}${opt('both', f('health'), 'Faulty and Aged')}</select>
       <select id="fage" title="Minimum age"><option value="">Any age</option>${[3, 4, 5, 6, 7, 8, 10].map(y => opt(String(y), f('age'), `${y}+ years`)).join('')}</select>` : ''}
     </div>
+    ${activeFilterChips(params)}
     <div class="bulkbar" id="bulkbar" hidden>
       <b>✔ <span class="bulkCount">0</span> selected</b>
-      <div class="picker" style="flex-direction:row;align-items:center;flex-wrap:wrap">${holderFilters()}<input type="search" class="pick-q" placeholder="To whom / where? (search)" style="width:170px">
-        <select id="bulkHolder" class="pick-list" style="max-width:280px"><option value="">– To whom / where? –</option>${holderOptions('')}</select></div>
-      <button class="primary" onclick="bulkMove($('#bulkHolder').value)">Assign</button>
-      <button onclick="bulkMove('storage')">📦 Return to Stock</button>
+      <button class="primary" data-bulk="assign" onclick="assignWizard()">Assign Selected Assets</button>
+      <button data-bulk="return" onclick="bulkMove('storage')">📦 Return to Stock</button>
       <button onclick="labelDialog([...selected])">🏷 Print labels</button>
-      <select id="bulkStatus"><option value="">Status…</option>${Object.entries(STATUS).map(([k, s]) => `<option value="${k}">${s.label}</option>`).join('')}</select>
+      <select id="bulkStatus" aria-label="New status"><option value="">Status…</option>${Object.entries(STATUS).map(([k, s]) => `<option value="${k}">${s.label}</option>`).join('')}</select>
       <button onclick="bulkStatus()">Set</button>
       <span class="spacer"></span><button class="sm" onclick="selected.clear(); render()">✕ Clear selection</button>
     </div>
-    ${assetRows(list, {select:true})}`;
+    ${assetRows(list, {select:true, cols:shownCols()})}`;
 }
 function bindAssetFilters(){
   const ids = {q:'#fq', view:'#fview', type:'#ftype', model:'#fmodel', office:'#foffice', room:'#froom', person:'#fperson', service:'#fsvc', mode:'#fmode', loc:'#floc', status:'#fstatus', warr:'#fwarr', health:'#fhealth', age:'#fage'};
   const upd = () => {
-    const p = new URLSearchParams();
-    for (const [k, sel] of Object.entries(ids)) if ($(sel) && $(sel).value) p.set(k, $(sel).value);
+    // a hidden filter has no control on the page, so its value is kept from the address
+    const p = new URLSearchParams(location.hash.split('?')[1] || '');
+    for (const [k, sel] of Object.entries(ids)) if ($(sel)){ if ($(sel).value) p.set(k, $(sel).value); else p.delete(k); }
+    if (p.get('view') !== 'health'){ p.delete('health'); p.delete('age'); }
     if (p.get('room') && p.get('office') && (room(p.get('room')) || {}).officeId !== p.get('office')) p.delete('room');
     // a model that does not belong to the newly chosen type is dropped
     if (p.get('model') && p.get('type') && (model(p.get('model')) || {}).typeId !== p.get('type')) p.delete('model');
@@ -148,6 +267,7 @@ function bindAssetFilters(){
   };
   $('#fq').addEventListener('input', upd);
   for (const s of Object.values(ids).slice(1)) if ($(s)) $(s).addEventListener('change', upd);
+  $('#fsaved').addEventListener('change', e => applySavedView(e.target.value));
 }
 
 // ---------- assignment and return: one rule set for every screen ----------
@@ -208,11 +328,158 @@ async function bulkMove(hs){
     if (confirm(`${ids.length} asset(s) returned from ${person(pid).name}.\n\nCreate a return document?`)) docDialog(pid, 'in', ids);
   }
 }
-function bulkStatus(){
+async function bulkStatus(){
   const s = $('#bulkStatus').value;
   if (!s){ alert('Choose a status.'); return; }
-  for (const a of [...selected].map(asset).filter(Boolean)) if (a.status !== s){ log(a.id, `Status: ${STATUS[a.status].label} → ${STATUS[s].label}`, 'updated'); a.status = s; }
-  selected.clear(); save(); render();
+  const list = [...selected].map(asset).filter(Boolean), change = list.filter(a => a.status !== s);
+  if (!change.length){ toast(`Already ${STATUS[s].label}.`); return; }
+  const ok = await askConfirm('Change status', `<p>${change.length} of ${list.length} selected asset(s) change to <b>${STATUS[s].label}</b>.</p>
+    <div class="tbl-wrap"><table><thead><tr><th>Asset ID</th><th>Asset Name</th><th>Current Status</th><th>New Status</th></tr></thead><tbody>${change.map(a => `<tr><td class="tag">${esc(a.tag)}</td><td>${esc(assetName(a))}</td><td>${statusPill(a.status)}</td><td>${statusPill(s)}</td></tr>`).join('')}</tbody></table></div>`, `Set ${change.length} asset(s)`);
+  if (!ok) return;
+  for (const a of change){ log(a.id, `Status: ${STATUS[a.status].label} → ${STATUS[s].label}`, 'updated'); a.status = s; }
+  selected.clear(); save(); render(); toast(`${change.length} asset(s) set to ${STATUS[s].label}.`);
+}
+
+// ---------- checks shared by Assign Selected Assets and Move Asset ----------
+// state: ok = goes ahead | review = needs an explicit tick | blocked = cannot go | same = nothing to change
+const canTouch = (a, key) => canAt(key, a.officeId);
+function assignCheck(a, t){
+  const out = (state, reason) => ({a, state, reason});
+  const key = t.serviceId ? 'assets.edit' : t.h.kind === 'person' ? 'assets.assign' : 'assets.move';
+  if (!canTouch(a, key)) return out('blocked', `You do not have permission for this at ${officeLabel(a.officeId)}.`);
+  if (a.holder.kind === 'transit') return out('blocked', 'In transit. Record the shipment as received first.');
+  if (inOpenShipment(a.id)) return out('blocked', 'Part of a shipment that is being prepared. Finish or remove the shipment first.');
+  if (t.serviceId){
+    if (a.serviceId === t.serviceId) return out('same', 'Already linked to this Service.');
+    if (a.serviceId) return out('review', `Linked to ${serviceName(a.serviceId)} now. That link is replaced.`);
+    const p = assetPerson(a);
+    if (p && p.serviceId && p.serviceId !== t.serviceId) return out('review', `Held by ${p.name} (${serviceName(p.serviceId)}). The person keeps the asset.`);
+    return out('ok', 'Only the Service link changes, not the location.');
+  }
+  const h = t.h, target = h.kind === 'person' ? person(h.id) : null, tOff = holderOffice(h), tCountry = target ? (office(target.officeId) || {}).countryId : null;
+  if (holderKey(h) === holderKey(a.holder)) return out('same', 'Already there.');
+  if ((tOff && tOff !== a.officeId) || (tCountry && tCountry !== (office(a.officeId) || {}).countryId)) return out('blocked', `Belongs to ${officeCountry(a.officeId).name || '?'} · ${officeLabel(a.officeId)}. Moving it there needs a Shipment.`);
+  const why = [];
+  if (a.holder.kind === 'person') why.push(`Assigned to ${(assetPerson(a) || {}).name || '?'} now. That assignment ends.`);
+  const ret = openReturnOf(a.id);
+  if (ret) why.push('A return is expected for this asset. It will be recorded as returned.');
+  if (target && target.officeId !== a.officeId) why.push(`Belongs to ${officeLabel(a.officeId)}, ${target.name} works at ${officeLabel(target.officeId)}. The office of the asset stays.`);
+  if (target && target.status !== 'Active') why.push(`${target.name} is ${target.status}. The asset will be listed as awaiting return.`);
+  const r = reservedBy(a.id);
+  if (r && !(target && r.part && r.part.personId === target.id)) why.push(`Reserved in project “${r.project.name}”. Confirming removes it from that project.`);
+  if (a.status !== 'ok') why.push(`Status is ${STATUS[a.status].label}.`);
+  if (why.length) return out('review', why.join(' '));
+  return out('ok', a.holder.kind === 'storage' ? 'Leaves the stock.' : a.holder.kind === 'site' || a.holder.kind === 'office' || a.holder.kind === 'desk' ? 'Leaves its current location.' : '');
+}
+function applyTarget(a, t, extra){
+  if (t.serviceId){ setAssetService(a, t.serviceId, extra); return; }
+  const r = reservedBy(a.id), target = t.h.kind === 'person' ? person(t.h.id) : null;
+  if (r && !(target && r.part && r.part.personId === target.id)) releaseReservation(r, a);
+  setHolder(a, t.h, extra);
+}
+const CHECK_PILL = {ok:['ok', 'Ready'], review:['warn', 'Needs your check'], blocked:['bad', 'Cannot be changed'], same:['', 'No change']};
+const targetLabel = t => t.serviceId ? '🧩 ' + serviceName(t.serviceId) : holderText(t.h);
+const targetKind = t => t.serviceId ? 'Service' : {person:'Person', storage:'Warehouse', site:'Office', office:'Room', desk:'Desk'}[t.h.kind] || 'Location';
+
+// ---------- Assign Selected Assets: Review → Target → Check → Preview → Result ----------
+const WIZ_STEPS = ['Review assets', 'Choose target', 'Check', 'Preview', 'Result'];
+function assignWizard(){
+  const w = {ids:[...selected].filter(asset), step:0, type:'person', person:'', office:'', place:'', service:'', ack:{}, ticket:'', note:'', busy:false, res:null};
+  if (!w.ids.length) return;
+  const offs = [...new Set(w.ids.map(i => asset(i).officeId))];
+  w.office = offs.length === 1 ? offs[0] : '';
+  const target = () => w.type === 'person' ? (w.person && {h:{kind:'person', id:w.person}}) : w.type === 'office' ? (w.office && {h:w.place ? parseHolder(w.place) : {kind:'site', id:w.office}})
+    : w.type === 'service' ? (w.service && {serviceId:w.service}) : {h:{kind:'storage'}};
+  const checks = () => w.ids.map(asset).filter(Boolean).map(a => assignCheck(a, target()));
+  const going = () => checks().filter(c => c.state === 'ok' || (c.state === 'review' && w.ack[c.a.id]));
+  const stepper = () => `<ol class="wiz-steps">${WIZ_STEPS.map((s, i) => `<li class="${i === w.step ? 'on' : i < w.step ? 'done' : ''}">${i + 1}. ${s}</li>`).join('')}</ol>`;
+  const assetCell = a => `<td class="tag">${esc(a.tag)}</td><td>${esc(assetName(a))}</td>`;
+  const steps = [
+    () => `<p><b>${w.ids.length}</b> asset(s) selected. Remove any that should not be included.</p>
+      <div class="tbl-wrap nosort"><table><thead><tr><th>Asset Name</th><th>Asset ID</th><th>Type</th><th>Model</th><th>Current Location</th><th></th></tr></thead><tbody>${w.ids.map(asset).map(a => `<tr><td>${esc(assetName(a))}</td><td class="tag">${esc(a.tag)}</td><td>${esc(typeLabel(a.type))}</td><td>${esc(modelName(a))}</td><td>${esc(whereText(a))}</td><td><button type="button" class="sm" data-rm="${a.id}" aria-label="Remove ${esc(a.tag)}">✕</button></td></tr>`).join('')}</tbody></table></div>`,
+    () => {
+      const cid = scope.countryId, ppl = sortHu(db.people.filter(p => (office(p.officeId) || {}).countryId === cid), p => p.name), ofs = sortHu(db.offices.filter(o => o.countryId === cid), o => o.name);
+      const types = [['person', '👤 Person'], ['office', '🏢 Office'], ['service', '🧩 Service'], ['stock', '📦 Warehouse']];
+      const rooms = w.office ? sortHu(officeRooms(w.office), r => r.name) : [];
+      const p = person(w.person);
+      return `<div class="segs" role="radiogroup" aria-label="Target type">${types.map(([k, l]) => `<button type="button" role="radio" aria-checked="${k === w.type}" class="${k === w.type ? 'primary' : ''}" data-type="${k}">${l}</button>`).join('')}</div>
+        ${w.type === 'person' ? `<label class="f">Person *</label><select id="wzPerson" class="combo" style="width:100%"><option value="">– choose a person –</option>${ppl.map(x => `<option value="${x.id}"${x.id === w.person ? ' selected' : ''}>${esc(x.name)} – ${esc(serviceName(x.serviceId) || 'no Service')} · ${esc(officeLabel(x.officeId))}${x.status !== 'Active' ? ' · ' + x.status : ''}</option>`).join('')}</select>
+          ${p ? `<div class="loc-box" style="font-size:14px">👤 <b>${esc(p.name)}</b><br>Service: ${esc(serviceName(p.serviceId) || '–')} · Office: ${esc(officeLabel(p.officeId))} · ${esc(modeName(p.mode))}</div>` : ''}` : ''}
+        ${w.type === 'office' ? `<label class="f">Office *</label><select id="wzOffice" class="combo" style="width:100%"><option value="">– choose an office –</option>${ofs.map(o => `<option value="${o.id}"${o.id === w.office ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select>
+          ${rooms.length ? `<label class="f">Room or desk (optional)</label><select id="wzPlace" class="combo" style="width:100%"><option value="">Not placed yet – at the office</option>${rooms.map(r => `<option value="office:${r.id}"${w.place === 'office:' + r.id ? ' selected' : ''}>🏢 ${esc(r.name)} – room pool</option>${sortHu(db.desks.filter(k => k.roomId === r.id), k => k.label).map(k => `<option value="desk:${k.id}"${w.place === 'desk:' + k.id ? ' selected' : ''}>${furnIcon(k)} ${esc(r.name)} › ${esc(k.label)}</option>`).join('')}`).join('')}</select>` : ''}
+          <p class="muted" style="font-size:12px">The asset stays at the office and is not assigned to anyone.</p>` : ''}
+        ${w.type === 'service' ? `<label class="f">Service *</label><select id="wzService" class="combo" style="width:100%"><option value="">– choose a Service –</option>${sortHu(db.services, s => s.name).map(s => `<option value="${s.id}"${s.id === w.service ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
+          <p class="muted" style="font-size:12px">A Service link is added to the asset. Its location does not change.</p>` : ''}
+        ${w.type === 'stock' ? '<p class="muted">The assets go back to the stock of their own office.</p>' : ''}
+        <div class="two"><div><label class="f">Ticket (optional)</label><input id="wzTicket" value="${esc(w.ticket)}"></div><div><label class="f">Note (optional)</label><input id="wzNote" value="${esc(w.note)}"></div></div>`;
+    },
+    () => {
+      const cs = checks(), n = s => cs.filter(c => c.state === s).length;
+      return `<p>${n('ok')} ready · ${n('review')} need your check · ${n('blocked')} cannot be changed · ${n('same')} no change</p>
+        <div class="tbl-wrap nosort"><table><thead><tr><th>Asset ID</th><th>Asset Name</th><th>Current Location</th><th>Result</th></tr></thead><tbody>${cs.map(c => `<tr>${assetCell(c.a)}<td>${esc(whereText(c.a))}</td><td><span class="pill ${CHECK_PILL[c.state][0]}">${CHECK_PILL[c.state][1]}</span>${c.reason ? `<br><small>${esc(c.reason)}</small>` : ''}
+          ${c.state === 'review' ? `<label class="cb" style="margin:4px 0 0"><input type="checkbox" data-ack="${c.a.id}"${w.ack[c.a.id] ? ' checked' : ''}> Include this asset</label>` : ''}</td></tr>`).join('')}</tbody></table></div>
+        ${n('review') ? '<p class="muted" style="font-size:12px">An asset that needs your check stays unchanged unless you include it.</p>' : ''}`;
+    },
+    () => {
+      const cs = checks(), go = going(), t = target(), left = cs.filter(c => !go.includes(c)), p = t.h && t.h.kind === 'person' ? person(t.h.id) : null;
+      return `<dl class="kv card"><dt>Selected</dt><dd><b>${cs.length}</b> asset(s)</dd><dt>Target</dt><dd><b>${esc(targetLabel(t))}</b></dd><dt>Assignment type</dt><dd>${targetKind(t)}</dd>
+        ${p ? `<dt>Service</dt><dd>${esc(serviceName(p.serviceId) || '–')}</dd>` : ''}<dt>Will change</dt><dd><b>${go.length}</b> asset(s)</dd><dt>Stay unchanged</dt><dd><b>${left.length}</b> asset(s)</dd>${w.ticket ? `<dt>Ticket</dt><dd>${esc(w.ticket)}</dd>` : ''}${w.note ? `<dt>Note</dt><dd>${esc(w.note)}</dd>` : ''}</dl>
+        ${go.length ? `<h4>What changes</h4><div class="tbl-wrap nosort"><table><thead><tr><th>Asset ID</th><th>Asset Name</th><th>From</th><th>To</th></tr></thead><tbody>${go.map(c => `<tr>${assetCell(c.a)}<td>${esc(t.serviceId ? serviceName(c.a.serviceId) || '–' : whereText(c.a))}</td><td>${esc(targetLabel(t))}</td></tr>`).join('')}</tbody></table></div>` : '<div class="errbox">Nothing would change. Go back and choose another target.</div>'}
+        ${left.length ? `<h4>Stay unchanged</h4><div class="tbl-wrap nosort"><table><tbody>${left.map(c => `<tr>${assetCell(c.a)}<td>${c.state === 'review' ? 'Not included: ' + esc(c.reason) : esc(c.reason)}</td></tr>`).join('')}</tbody></table></div>` : ''}`;
+    },
+    () => {
+      const {done, failed, skipped} = w.res, t = target();
+      return `<div class="${failed.length || skipped.length ? 'warnbox' : 'okbox'}"><b>${done.length}</b> of ${done.length + failed.length + skipped.length} asset(s) changed. Target: ${esc(targetLabel(t))}.</div>
+        ${failed.length ? `<h4>Failed</h4><div class="tbl-wrap nosort"><table><tbody>${failed.map(x => `<tr>${assetCell(x.a)}<td>${esc(x.reason)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+        ${skipped.length ? `<h4>Not changed</h4><div class="tbl-wrap nosort"><table><tbody>${skipped.map(x => `<tr>${assetCell(x.a)}<td>${esc(x.reason)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+        ${done.length && t.h && t.h.kind === 'person' && can('documents.create') ? '<p><button type="button" id="wzDoc">📄 Create handover document</button></p>' : ''}`;
+    },
+  ];
+  const nextOk = () => w.step === 0 ? w.ids.length > 0 : w.step === 1 ? !!target() : w.step === 2 ? going().length > 0 : w.step === 3 ? going().length > 0 : false;
+  const paint = () => {
+    $('#wzBody').innerHTML = stepper() + steps[w.step]();
+    const last = w.step === 4;
+    $('#wzBack').hidden = w.step === 0 || last;
+    $('#wzNext').hidden = last;
+    $('#wzClose').textContent = last ? 'Close' : 'Cancel';
+    $('#wzNext').textContent = w.step === 3 ? `Confirm: change ${going().length} asset(s)` : 'Continue';
+    $('#wzNext').disabled = !nextOk();
+    const doc = $('#wzDoc');
+    if (doc) doc.onclick = () => { const pid = target().h.id, ids = w.res.done.map(a => a.id); $('#dlg').close(); docDialog(pid, 'out', ids); };
+  };
+  const run = () => {
+    if (w.busy) return;
+    w.busy = true;
+    const t = target(), res = {done:[], failed:[], skipped:[]}, included = new Set(going().map(c => c.a.id)), extra = {ticket:w.ticket.trim(), note:w.note.trim()};
+    for (const c of checks()){
+      if (!included.has(c.a.id)){ res.skipped.push({a:c.a, reason:c.state === 'review' ? 'Not included: ' + c.reason : c.reason}); continue; }
+      try { applyTarget(c.a, t, extra); res.done.push(c.a); selected.delete(c.a.id); }
+      catch(e){ res.failed.push({a:c.a, reason:e.message}); }
+    }
+    save(); render();
+    w.res = res; w.step = 4; w.busy = false; paint();
+    toast(`${res.done.length} asset(s) changed.`);
+  };
+  openDialog(`<h3>Assign Selected Assets</h3><div id="wzBody"></div>
+    <div class="actions"><button type="button" id="wzClose">Cancel</button><button type="button" id="wzBack">Back</button><button type="button" class="primary" id="wzNext">Continue</button></div>`, () => false, {wide:true});
+  $('#wzClose').onclick = () => $('#dlg').close();
+  $('#wzBack').onclick = () => { w.step--; paint(); };
+  $('#wzNext').onclick = () => { if (!nextOk()) return; if (w.step === 3) run(); else { w.step++; paint(); } };
+  $('#wzBody').addEventListener('click', e => {
+    const rm = e.target.closest('[data-rm]'), ty = e.target.closest('[data-type]');
+    if (rm){ w.ids = w.ids.filter(i => i !== rm.dataset.rm); selected.delete(rm.dataset.rm); updateBulk(); paint(); }
+    if (ty){ w.type = ty.dataset.type; w.ack = {}; paint(); }
+  });
+  $('#wzBody').addEventListener('change', e => {
+    const t = e.target;
+    if (t.id === 'wzPerson'){ w.person = t.value; w.ack = {}; paint(); }
+    if (t.id === 'wzOffice'){ w.office = t.value; w.place = ''; w.ack = {}; paint(); }
+    if (t.id === 'wzPlace'){ w.place = t.value; w.ack = {}; }
+    if (t.id === 'wzService'){ w.service = t.value; w.ack = {}; paint(); }
+    if (t.dataset.ack){ w.ack[t.dataset.ack] = t.checked; $('#wzNext').disabled = !nextOk(); }
+  });
+  $('#wzBody').addEventListener('input', e => { if (e.target.id === 'wzTicket') w.ticket = e.target.value; if (e.target.id === 'wzNote') w.note = e.target.value; });
+  paint();
 }
 function returnAll(pid){
   const ids = personAssets(pid).direct.map(a => a.id);
@@ -238,13 +505,67 @@ function toStorage(id){
       if (data.mkdoc) setTimeout(() => docDialog(pid, 'in', [a.id]));
     });
 }
-async function quickMove(id){
-  const a = asset(id), hs = $('#moveSel').value;
-  if (!hs){ alert('Choose a target from the list.'); return; }
-  const h = parseHolder(hs);
-  if (holderKey(h) === holderKey(a.holder)){ toast('The asset is already there.'); return; }
-  if (!await confirmMove([a], h)) return;
-  setHolder(a, h); save(); render();
+// the warehouses of an office: its stock, plus any room marked as a Storage room
+const warehousesOf = oid => [{v:'storage', l:`📦 In Stock – ${officeLabel(oid)}`}, ...sortHu(officeRooms(oid).filter(r => r.kind === 'storage'), r => r.name).map(r => ({v:'office:' + r.id, l:`📦 ${roomPath(r)} – storage room`}))];
+function returnToWarehouse(id){
+  const a = asset(id);
+  if (a.holder.kind === 'transit'){ alert('This asset is in transit. Record the shipment as received first.'); return; }
+  if (a.holder.kind === 'storage'){ toast('The asset is already in stock.'); return; }
+  const ws = warehousesOf(a.officeId), res = reservedBy(a.id), ret = openReturnOf(a.id), pid = a.holder.kind === 'person' ? a.holder.id : null;
+  openDialog(`<h3>📦 Return to Warehouse</h3>
+    <dl class="kv card"><dt>Asset</dt><dd><b class="tag">${esc(a.tag)}</b> ${esc(assetName(a))}</dd><dt>Current location</dt><dd>${esc(whereText(a))}</dd>${ws.length < 2 ? `<dt>Warehouse</dt><dd><b>${esc(ws[0].l)}</b></dd>` : ''}</dl>
+    ${ws.length > 1 ? `<label class="f">Warehouse</label><select name="target" style="width:100%">${ws.map(w => `<option value="${w.v}">${esc(w.l)}</option>`).join('')}</select>` : `<input type="hidden" name="target" value="storage">`}
+    ${pid ? `<div class="warnbox">The assignment to ${esc((person(pid) || {}).name || '?')} ends.</div>` : ''}
+    ${ret ? '<div class="warnbox">The expected return is recorded as returned.</div>' : ''}
+    ${res ? `<div class="warnbox">⚠ Reserved in project “${esc(res.project.name)}”. Confirming removes it from that project.</div>` : ''}
+    ${fp.editing ? '<div class="warnbox">The floorplan is being edited: this change is saved together with the floorplan.</div>' : ''}
+    ${pid && can('documents.create') ? '<label class="cb"><input type="checkbox" name="mkdoc"> Create a return document</label>' : ''}
+    ${dlgActions('Return to Warehouse')}`,
+    data => {
+      const r = reservedBy(a.id); if (r) releaseReservation(r, a);
+      setHolder(a, parseHolder(data.target)); save(); render(); toast(`${a.tag} returned to the warehouse.`);
+      if (data.mkdoc) setTimeout(() => docDialog(pid, 'in', [a.id]));
+    });
+}
+// one searchable list for every target; a target that needs a Shipment is shown as such and never moves the asset here
+function moveDialog(id){
+  const a = asset(id), others = sortHu(db.offices.filter(o => o.id !== a.officeId), o => (country(o.countryId) || {}).name + o.name);
+  const opts = `<option value="">– choose a target –</option>${holderOptions('', {officeId:a.officeId})}
+    <optgroup label="Service">${sortHu(db.services, s => s.name).map(s => `<option value="service:${s.id}">🧩 ${esc(s.name)}</option>`).join('')}</optgroup>
+    ${others.length ? `<optgroup label="Another office or country – Shipment required">${others.map(o => `<option value="ship:${o.id}">🚚 ${esc((country(o.countryId) || {}).name || '')} › ${esc(o.name)}</option>`).join('')}</optgroup>` : ''}`;
+  const parse = v => v.startsWith('service:') ? {serviceId:v.slice(8)} : {h:parseHolder(v)};
+  openDialog(`<h3>Move Asset</h3>
+    <dl class="kv card"><dt>Asset</dt><dd><b class="tag">${esc(a.tag)}</b> ${esc(assetName(a))}</dd><dt>Current location</dt><dd>${esc(whereText(a))}</dd></dl>
+    <label class="f">Target</label><select id="mvTarget" class="combo" style="width:100%">${opts}</select>
+    <div id="mvPrev"></div>
+    <div class="row" style="margin-top:8px"><div style="flex:1;min-width:160px"><label class="f">Ticket (optional)</label><input id="mvTicket" style="width:100%"></div><div style="flex:1;min-width:160px"><label class="f">Note (optional)</label><input id="mvNote" style="width:100%"></div></div>
+    <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button type="button" class="primary" id="mvOk" disabled>Confirm move</button></div>`, () => false);
+  let done = false;
+  const paint = () => {
+    const v = $('#mvTarget').value, box = $('#mvPrev'), ok = $('#mvOk');
+    ok.disabled = true;
+    if (!v){ box.innerHTML = ''; return; }
+    if (v.startsWith('ship:')){
+      box.innerHTML = `<div class="warnbox">🚚 ${esc(officeLabel(v.slice(5)))} is another office, so this asset can only get there with a Shipment. Nothing is moved from here.<br><a href="#/projects" id="mvShip">Open Projects to create a Shipment ›</a></div>`;
+      $('#mvShip').addEventListener('click', () => $('#dlg').close());
+      return;
+    }
+    const t = parse(v), c = assignCheck(a, t);
+    box.innerHTML = `<dl class="kv card" style="margin-top:8px"><dt>Planned</dt><dd><b>${esc(targetLabel(t))}</b></dd><dt>Type</dt><dd>${targetKind(t)}</dd></dl>
+      <div class="${{blocked:'errbox', review:'warnbox', same:'warnbox', ok:'okbox'}[c.state]}">${esc(c.reason || 'Ready to move.')}</div>
+      ${c.state === 'review' ? '<label class="cb"><input type="checkbox" id="mvAck"> I checked this, go ahead</label>' : ''}`;
+    ok.disabled = c.state === 'blocked' || c.state === 'same' || c.state === 'review';
+    const ack = $('#mvAck'); if (ack) ack.addEventListener('change', () => { ok.disabled = !ack.checked; });
+  };
+  $('#mvTarget').addEventListener('change', paint);
+  $('#mvOk').addEventListener('click', () => {
+    if (done) return;
+    const t = parse($('#mvTarget').value), c = assignCheck(a, t);
+    if (c.state === 'blocked' || c.state === 'same') return paint();
+    done = true;
+    applyTarget(a, t, {ticket:$('#mvTicket').value.trim(), note:$('#mvNote').value.trim()});
+    save(); $('#dlg').close(); render(); toast(`${a.tag} moved: ${targetLabel(t)}`);
+  });
 }
 function deleteAsset(id){
   const a = asset(id);
@@ -264,8 +585,8 @@ function deleteAsset(id){
 // ---------- asset page ----------
 function viewAsset(id){
   const a = asset(id);
-  if (!a) return `<div class="empty">Asset not found.</div>`;
-  const hist = db.log.filter(l => l.assetId === id);
+  if (!a) return `<div class="empty"><h2>Asset not found</h2><p>It may have been deleted. Data is stored per browser, so a link opened on another device only works if that browser holds the same data.</p></div>`;
+  const hist = db.log.filter(l => l.assetId === id), canMove = canTouch(a, 'assets.move') || canTouch(a, 'assets.assign');
   const docs = db.docs.filter(d => d.items.some(i => i.assetId === id));
   const swaps = db.swaps.filter(s => s.oldId === id || s.newId === id);
   const img = assetImg(a), res = reservedBy(id), ret = currentReturn(id);
@@ -281,11 +602,10 @@ function viewAsset(id){
     <div class="loc-box">Currently: <b>${holderLink(a.holder)}</b>${a.placement ? `<br><span style="font-size:14px">${esc(placementText(a))} – <a href="#/room/${(desk(a.placement.deskId) || {}).roomId}/${a.placement.deskId}">open on the floorplan</a></span>` : ''}
       ${res ? `<br><span style="font-size:14px">📋 Reserved for project: <a href="#/project/${res.project.id}">${esc(res.project.name)}</a>${res.part ? ' – ' + esc((person(res.part.personId) || {}).name || '?') : ''}${res.prep ? ` · <b>${esc(res.prep)}</b>` : ''} (not checked out yet)</span>` : ''}
       ${ret ? `<br><span style="font-size:14px">↩ <b>${RETURN_STATE[ret.state]}</b> from ${personLink(ret.personId)}${ret.state === 'awaiting' ? ` <button class="sm" onclick="toStorage('${a.id}')">Record return</button>` : ''}</span>` : ''}</div>
-    <div class="row" style="margin-bottom:16px;align-items:flex-start">
-      <span class="muted" style="padding-top:8px">Quick Move:</span>
-      <div style="min-width:320px;flex:0 1 460px">${picker('move', holderOptions(holderKey(a.holder), {officeId:a.officeId}), {id:'moveSel', size:6, filters:true})}</div>
-      <button class="primary" onclick="quickMove('${a.id}')">Move</button>
-    </div>
+    ${canMove ? `<div class="row" style="margin-bottom:16px">
+      <button class="primary" onclick="moveDialog('${a.id}')"${a.holder.kind === 'transit' ? ' disabled title="In transit: record the shipment as received first."' : ''}>Move Asset</button>
+      <button onclick="returnToWarehouse('${a.id}')"${['transit', 'storage'].includes(a.holder.kind) ? ` disabled title="${a.holder.kind === 'storage' ? 'Already in stock.' : 'In transit: record the shipment as received first.'}"` : ''}>📦 Return to Warehouse</button>
+    </div>` : ''}
     <div class="asset-head">
       ${img ? `<img class="photo" src="${img}" alt="${esc(modelName(a))}">` : `<div class="photo none" title="No image – upload one when editing">${typeIcon(a.type)}</div>`}
       <div class="card"><dl class="kv">
@@ -312,8 +632,20 @@ function viewAsset(id){
       <div class="card"><dl class="kv">${fields.map(f => `<dt>${esc(f.name)}${f.required ? ' *' : ''}</dt><dd>${esc(fieldValueText(f, a.custom[f.id]))}</dd>`).join('')}</dl></div>` : ''}
     ${swaps.length ? `<h2>🔁 Swaps</h2>${swapTable(swaps)}` : ''}
     ${docs.length ? `<h2>📄 Documents that include it</h2>${docTable(docs, true)}` : ''}
-    <h2>History</h2>
+    <h2>Movement history</h2>
+    ${moveHistory(hist)}
+    <p class="muted" style="font-size:12px">Kept in this browser with the rest of the data. It is a working record, not a tamper-proof audit log.</p>
+    <h2>All changes</h2>
     ${logTable(hist, {noSubject:true})}`;
+}
+// older entries have no from/to fields, so those two are read from the logged text
+function moveHistory(hist){
+  const rows = hist.filter(l => ['moved', 'checkout', 'returned'].includes(l.cat) || l.from).map(l => {
+    const m = l.from ? null : /: (.*) → (.*)$/.exec(l.text);
+    return {...l, from:l.from || (m ? m[1] : ''), to:l.to || (m ? m[2] : ''), label:l.text.startsWith('🔁') ? 'Replacement' : l.text.startsWith('Service') ? 'Service' : LOG_CATS[l.cat] || l.cat};
+  });
+  if (!rows.length) return '<div class="empty">No movements recorded.</div>';
+  return `<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>From</th><th>To</th><th>By</th><th>Ticket</th><th>Note</th></tr></thead><tbody>${rows.map(r => `<tr><td class="muted" style="white-space:nowrap" data-v="${r.ts}">${fmtTime(r.ts)}</td><td><span class="pill ${CAT_PILL[r.cat] || ''}">${esc(r.label)}</span></td><td>${esc(r.from) || (r.label === 'Replacement' ? esc(r.text) : '–')}</td><td>${esc(r.to) || '–'}</td><td class="muted">${esc(r.by || '–')}</td><td>${esc(r.ticket || '–')}</td>${clipCell(r.note)}</tr>`).join('')}</tbody></table></div>`;
 }
 
 // ---------- asset form ----------
@@ -369,7 +701,7 @@ function assetForm(a, presetHolder, presetType){
       <div><label class="f">Service (optional)</label><select name="serviceId">${selOpts(sortHu(db.services, s => s.name), a.serviceId, s => s.name, '–')}</select></div>
     </div>
     <label class="f">Location / assigned to</label>
-    ${picker('holder', holderOptions(holderKey(a.holder), {officeId:a.officeId}), {size:5, filters:true})}
+    <select name="holder" class="combo">${holderOptions(holderKey(a.holder), {officeId:a.officeId})}</select>
     <h3 style="margin-top:18px;font-size:14px">Custom fields</h3>
     <div id="fCustom">${customInputs(a.type, custom)}</div>
     <h3 style="margin-top:18px;font-size:14px">Purchase & warranty</h3>
@@ -487,10 +819,12 @@ function swapDialog(oldId){
       <div><label class="f">Reason</label><select name="reason" id="swReason">${Object.entries(SWAP_REASONS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
       <div><label class="f">New status of the replaced asset</label><select name="oldStatus" id="swStatus">${Object.entries(STATUS).map(([k, s]) => `<option value="${k}"${k === 'repair' ? ' selected' : ''}>${s.label}</option>`).join('')}</select></div>
     </div>
+    <label class="f">Target</label><p style="margin:0"><b>${owner ? '👤 ' + esc(person(owner).name) : old.serviceId ? '🧩 ' + esc(serviceName(old.serviceId)) : esc(whereText(old))}</b> <small class="muted">${owner ? 'Person' : old.serviceId ? 'Service' : 'Location'}</small></p>
+    <label class="f">Ticket (optional)</label><input name="ticket" style="width:100%" placeholder="e.g. INC-20417">
     <label class="f">Fault description / note</label><textarea name="note" style="width:100%" placeholder="e.g. does not power on, striped image"></textarea>
     <label class="f">Replacement asset (working, in stock)</label>
     <label class="cb" style="margin:4px 0"><input type="checkbox" id="swSame"${hasSame ? ' checked' : ''}> Same type only (${esc(typeLabel(old.type))})</label>
-    <select name="newId" id="swSel" size="7" required style="width:100%">${cands.map(a =>
+    <select name="newId" id="swSel" class="combo" required style="width:100%">${cands.map(a =>
       `<option value="${a.id}" data-type="${esc(a.type)}">${typeIcon(a.type)} ${esc(a.tag)} · ${esc(modelName(a))} · ${esc(a.serial)}</option>`).join('')}</select>
     <div class="two">
       <div><label class="f">Date</label><input type="date" name="date" required value="${todayIso()}"></div>
@@ -501,24 +835,34 @@ function swapDialog(oldId){
     data => {
       const nw = asset(data.newId);
       if (!nw){ alert('Choose the replacement asset.'); return false; }
-      const where = whereText(old), h = old.holder, place = old.placement, reason = SWAP_REASONS[data.reason];
-      setHolder(nw, h);
-      if (place) nw.placement = {...place};
-      setHolder(old, {kind:'storage'});
-      if (old.status !== data.oldStatus){ log(old.id, `Status: ${STATUS[old.status].label} → ${STATUS[data.oldStatus].label}`, 'updated'); old.status = data.oldStatus; }
-      log(old.id, `🔁 Replaced by ${nw.tag} – ${reason}${data.note.trim() ? ': ' + data.note.trim() : ''}`, 'returned');
-      log(nw.id, `🔁 Checked out as replacement for ${old.tag} (${where})`, 'checkout');
-      const sw = {id:uid(), ts:Date.now(), date:data.date, oldId:old.id, newId:nw.id, oldTag:old.tag, newTag:nw.tag,
-        reason, note:data.note.trim(), oldStatus:data.oldStatus, where, personId:owner, docId:null};
-      db.swaps.unshift(sw);
-      let doc = null;
-      if (owner && data.mkdoc){
-        doc = createDoc(owner, 'swap', [], {date:data.date, handler:data.handler.trim(), note:data.note.trim(), reason,
-          items:[{...snapAsset(nw), role:'out'}, {...snapAsset(old), role:'in'}], swapId:sw.id});
-        sw.docId = doc.id;
-      }
-      save(); render();
-      if (doc) printDoc(doc.id);
+      const where = whereText(old), reason = SWAP_REASONS[data.reason], ticket = data.ticket.trim();
+      // nothing has changed yet: the summary is the last stop before the swap
+      askConfirm('Confirm the swap', `<dl class="kv card"><dt>Target</dt><dd><b>${owner ? esc(person(owner).name) : old.serviceId ? esc(serviceName(old.serviceId)) : esc(where)}</b></dd>
+        <dt>Old asset (comes back)</dt><dd><b class="tag">${esc(old.tag)}</b> ${esc(assetName(old))}<br><small class="muted">To stock, status: ${STATUS[data.oldStatus].label}</small></dd>
+        <dt>New asset (handed over)</dt><dd><b class="tag">${esc(nw.tag)}</b> ${esc(assetName(nw))}<br><small class="muted">To: ${esc(where)}</small></dd>
+        <dt>Reason</dt><dd>${esc(reason)}</dd>${ticket ? `<dt>Ticket</dt><dd>${esc(ticket)}</dd>` : ''}${data.note.trim() ? `<dt>Note</dt><dd>${esc(data.note.trim())}</dd>` : ''}</dl>`, 'Do the swap').then(ok => {
+        if (!ok) return;
+        const h = old.holder, place = old.placement, extra = ticket ? {ticket} : {};
+        setHolder(nw, h, {...extra, note:'Replacement for ' + old.tag});
+        if (place) nw.placement = {...place};
+        if (!owner && old.serviceId && nw.serviceId !== old.serviceId) setAssetService(nw, old.serviceId, extra);
+        setHolder(old, {kind:'storage'}, {...extra, note:'Replaced by ' + nw.tag});
+        if (old.status !== data.oldStatus){ log(old.id, `Status: ${STATUS[old.status].label} → ${STATUS[data.oldStatus].label}`, 'updated'); old.status = data.oldStatus; }
+        log(old.id, `🔁 Replaced by ${nw.tag} – ${reason}${data.note.trim() ? ': ' + data.note.trim() : ''}`, 'returned', extra);
+        log(nw.id, `🔁 Checked out as replacement for ${old.tag} (${where})`, 'checkout', extra);
+        const sw = {id:uid(), ts:Date.now(), date:data.date, oldId:old.id, newId:nw.id, oldTag:old.tag, newTag:nw.tag,
+          reason, note:data.note.trim(), ticket, oldStatus:data.oldStatus, where, personId:owner, docId:null};
+        db.swaps.unshift(sw);
+        let doc = null;
+        if (owner && data.mkdoc){
+          doc = createDoc(owner, 'swap', [], {date:data.date, handler:data.handler.trim(), note:data.note.trim(), reason,
+            items:[{...snapAsset(nw), role:'out'}, {...snapAsset(old), role:'in'}], swapId:sw.id});
+          sw.docId = doc.id;
+        }
+        $('#dlg').close(); save(); render();
+        if (doc) printDoc(doc.id);
+      });
+      return false;
     });
   const filt = () => {
     const same = $('#swSame').checked, sel = $('#swSel');
@@ -536,7 +880,7 @@ function swapTable(list, opts = {}){
     return `<tr><td style="white-space:nowrap">${fmtDate(s.date)}</td>
       ${opts.noWhere ? '' : `<td>${s.personId && person(s.personId) ? personLink(s.personId) : esc(s.where)}</td>`}
       <td>${tagLink(s.oldId, s.oldTag)}</td><td>➜</td><td>${tagLink(s.newId, s.newTag)}</td>
-      <td>${esc(s.reason)}${s.note ? `<br><small class="muted">${esc(s.note)}</small>` : ''}</td>
+      <td>${esc(s.reason)}${s.ticket ? ` <span class="tag">${esc(s.ticket)}</span>` : ''}${s.note ? `<br><small class="muted">${esc(s.note)}</small>` : ''}</td>
       <td>${o ? statusPill(o.status) + `<br><small class="muted">${esc(whereText(o))}</small>` : '<span class="muted">deleted</span>'}</td>
       <td>${d ? `<span class="tag">${esc(d.no)}</span> ${d.fileId ? '<span class="pill ok">✔</span>' : '<span class="pill warn">awaiting signature</span>'}` : '<span class="muted">–</span>'}</td></tr>`;
   }).join('')}</tbody></table></div>`;

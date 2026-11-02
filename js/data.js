@@ -46,7 +46,7 @@ function defaultPerms(role){
   return out;
 }
 const DEFAULT_BRANDING = {logoId:null, primary:'', secondary:'', corners:'rounded', prev:null};
-const DEFAULT_PRESET = {id:'default', name:'Default', fields:{qr:true, serial:true, name:true, model:true, tag:false, type:false}, logo:false, logoPos:'right'};
+const DEFAULT_PRESET = {id:'default', name:'Default', fields:{qr:true, serial:true, name:true, model:true, tag:false, type:false}, logo:false, logoPos:'right', qrMode:'serial'};
 const ESIGN_PROVIDERS = {signnow:'SignNow', acrobat:'Adobe Acrobat Sign'};
 const STATUS = {
   ok:      {label:'Working',   cls:'ok'},
@@ -90,9 +90,9 @@ const OLD_TYPE_NAMES = {'Számítógép':'Computer', 'Fejhallgató':'Headset', '
 const DASH_ITEMS = {
   total:'Total Active Assets', office:'Office / Onsite Assets', assigned:'Assigned Assets', storage:'Storage / Spare Assets', lost:'Lost Assets', missing:'Missing Assets', faulty:'Faulty Assets', health:'Faulty / Aged Assets',
   returns:'Assets Awaiting Return', transit:'Assets In Transit', projects:'Active Projects', unsigned:'Documents to Sign', nodoc:'Assets Without Document',
-  warranty:'Warranty Expiring', models:'Top Models', services:'Services', remote:'WFH / Hybrid People', recent:'Recent Events',
+  warranty:'Warranty Expiring', activeList:'Active Projects List', awaitList:'Awaiting Returns', equip:'Equipment by Person', moves:'Recent Asset Movements', models:'Top Models', services:'Services', remote:'WFH / Hybrid People', recent:'Recent Events',
 };
-const DASH_SECTIONS = ['warranty', 'models', 'services', 'remote', 'recent'];
+const DASH_SECTIONS = ['warranty', 'activeList', 'awaitList', 'equip', 'moves', 'models', 'services', 'remote', 'recent'];
 const DASH_BREAKDOWN = ['total', 'office', 'assigned', 'storage', 'health'];
 function defaultDashboard(){
   return {items:Object.keys(DASH_ITEMS).map(id => ({id, visible:!['models', 'services', 'remote'].includes(id), size:id === 'total' ? 'wide' : 'normal', breakdown:DASH_BREAKDOWN.includes(id)})),
@@ -167,7 +167,9 @@ function migrate(d){
   d.settings.docTitles = {...DEFAULT_SETTINGS.docTitles, ...d.settings.docTitles};
   d.settings.docShow = {...DEFAULT_SETTINGS.docShow, ...d.settings.docShow};
   if (!d.settings.labelPresets) d.settings.labelPresets = [{...DEFAULT_PRESET, fields:{...DEFAULT_PRESET.fields}, ...(d.settings.label || LABEL_DEFAULT)}];
+  for (const p of d.settings.labelPresets) p.qrMode ||= 'serial';
   d.settings.labelPresetId ||= d.settings.labelPresets[0].id;
+  d.prefs ||= {};   // per-account view settings: filters, columns, saved views, Overview widgets
   // accounts are separate from people; a first Superadmin always exists so nobody is locked out
   if (!d.accounts.length){ let u = ''; try { u = localStorage.getItem(USER_KEY) || ''; } catch(e) {} d.accounts.push({id:uid(), username:'superadmin', displayName:u || 'Superadmin', role:'Superadmin', enabled:true, personId:null}); }
   d.permissions ||= {};
@@ -482,6 +484,9 @@ function currentAccount(){
   return a && a.enabled ? a : db.accounts.find(x => x.enabled && x.role === 'Superadmin') || db.accounts[0];
 }
 const currentUser = () => (currentAccount() || {}).displayName || '';
+// the person linked to the active account; there is no real sign-in, so this is only as reliable as the account switch
+const currentPerson = () => person((currentAccount() || {}).personId) || null;
+const myPrefs = () => (db.prefs[(currentAccount() || {}).id] ||= {});
 // the template values frozen into a document when it is created
 function tplSnapshot(kind, s){
   return {title:s.docTitles[kind], text:s[{out:'outText', in:'inText', swap:'swapText'}[kind]], footer:s.docFooter, show:{...s.docShow}, company:s.company, address:s.address, logoId:s.branding.logoId};
@@ -554,7 +559,7 @@ function setHolder(a, h, extra = {}){
   if (before === after) return;
   a.assignedAt = ['storage', 'office', 'site', 'transit'].includes(h.kind) ? null : Date.now();
   const cat = nowPerson ? 'checkout' : wasPerson ? 'returned' : 'moved';
-  log(a.id, `${{checkout:'Checked out', returned:'Returned', moved:'Moved'}[cat]}: ${before} → ${after}`, cat, {...extra, personId:nowPerson || wasPerson});
+  log(a.id, `${{checkout:'Checked out', returned:'Returned', moved:'Moved'}[cat]}: ${before} → ${after}`, cat, {...extra, personId:nowPerson || wasPerson, from:before, to:after});
   if (wasPerson && wasPerson !== nowPerson) closeReturns(a.id, wasPerson);
   const np = nowPerson && person(nowPerson);
   if (np && np.status !== 'Active') openReturn(a.id, np.id, 'status');
@@ -618,6 +623,12 @@ function setUserStatus(p, status, ticket, note){
     if (!r.sources.length){ r.state = 'cancelled'; r.closedAt = Date.now(); log(r.assetId, 'Return expectation cancelled: user is Active again', 'updated', {personId:p.id}); }
   }
 }
+// a Service link is an attribute of the asset: it never changes where the asset is
+function setAssetService(a, id, extra = {}){
+  const before = serviceName(a.serviceId), after = serviceName(id);
+  a.serviceId = id || null;
+  log(a.id, `Service: ${before || '–'} → ${after || '–'}`, 'updated', {...extra, from:'🧩 ' + (before || 'no Service'), to:'🧩 ' + (after || 'no Service')});
+}
 function setPlacement(a, deskId){
   const k = deskId && desk(deskId), old = placementText(a);
   a.placement = k ? {deskId:k.id} : null;
@@ -648,7 +659,8 @@ function modePool(rid, mode){
 
 // ---------- log ----------
 function log(assetId, text, cat = 'updated', extra = {}){
-  db.log.unshift({id:uid(), ts:Date.now(), cat, assetId:assetId || null, projectId:extra.projectId || null, personId:extra.personId || null, text, by:currentUser()});
+  db.log.unshift({id:uid(), ts:Date.now(), cat, assetId:assetId || null, projectId:extra.projectId || null, personId:extra.personId || null, text, by:currentUser(),
+    ...(extra.from ? {from:extra.from, to:extra.to} : {}), ...(extra.ticket ? {ticket:extra.ticket} : {}), ...(extra.note ? {note:extra.note} : {})});
   if (db.log.length > 8000) db.log.length = 8000;
 }
 const plog = (projectId, text) => log(null, text, 'project', {projectId});

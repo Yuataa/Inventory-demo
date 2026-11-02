@@ -1,6 +1,6 @@
 'use strict';
 /* QR codes and Avery L4732REV labels. The encoder is built in so printing works offline.
-   The QR code holds the Serial Number and nothing else; an asset without one gets no label. */
+   A preset decides what the QR code holds: the Serial Number, or a link to the asset page. */
 
 // byte mode, error correction level M, versions 1–10
 const QR_TOTAL = [0, 26, 44, 70, 100, 134, 172, 196, 242, 292, 346];
@@ -32,7 +32,7 @@ function qrEncode(text){
   let v = 1;
   const cap = n => QR_TOTAL[n] - QR_EC[n] * QR_BLOCKS[n] - (n < 10 ? 2 : 3);
   while (v <= 10 && bytes.length > cap(v)) v++;
-  if (v > 10) throw new Error('Serial Number is too long for a QR code.');
+  if (v > 10) throw new Error('The text is too long for a QR code.');
   const dataLen = QR_TOTAL[v] - QR_EC[v] * QR_BLOCKS[v];
   // bit stream: mode, length, bytes, terminator, padding
   const bits = [];
@@ -131,17 +131,27 @@ const LABEL = {w:35.6, h:16.9, cols:5, rows:16};
 const LABEL_FIELDS = {qr:'QR code', tag:'Asset ID', serial:'Serial Number', name:'Asset Name', model:'Model', type:'Asset Type'};
 const LABEL_CSS = `.lb{width:${LABEL.w}mm;height:${LABEL.h}mm;box-sizing:border-box;display:flex;align-items:center;gap:1mm;padding:1mm;overflow:hidden;background:#fff;color:#000;font-family:Arial,sans-serif}
   .lb .qr{flex:0 0 14.5mm;height:14.5mm} .lb .qr svg{display:block;width:100%;height:100%}
-  .lb .tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:.3mm;line-height:1.1}
-  .lb .tx b{font:700 6.5pt Consolas,monospace;overflow-wrap:anywhere}
-  .lb .tx span{font-size:5.5pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .lb .lg{flex:0 0 auto;max-width:9mm;max-height:12mm;object-fit:contain}`;
-// only values that exist are printed
+  .lb .tx{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:center;gap:.2mm;line-height:1.12;overflow:hidden}
+  .lb .tx b{font-family:Consolas,monospace;font-weight:700;overflow-wrap:anywhere}
+  .lb .tx span{overflow-wrap:anywhere}
+  .lb .lg{flex:0 0 auto;display:block;max-width:60%;height:2.8mm;object-fit:contain}`;
+const assetLink = a => location.href.split('#')[0] + '#/asset/' + a.id;
+const qrValue = (a, p) => p.qrMode === 'link' ? assetLink(a) : (a.serial || '').trim();
+// the logo sits in its own thin line above the text, so it never takes width from the values.
+// Sizes follow the real room: text shrinks to one line where it can, then wraps, and the whole block scales to the label height.
 function labelInner(a, p){
-  const f = p.fields, logo = p.logo && db.settings.branding.logoId && db.images[db.settings.branding.logoId];
-  const img = logo ? `<img class="lg" src="${logo}" alt="">` : '';
-  const lines = [f.tag && `<b>${esc(a.tag)}</b>`, f.serial && a.serial && `<b>${esc(a.serial)}</b>`, f.name && assetName(a) && `<span>${esc(assetName(a))}</span>`,
-    f.model && modelName(a) && `<span>${esc(modelName(a))}</span>`, f.type && `<span>${esc(typeLabel(a.type))}</span>`].filter(Boolean).join('');
-  return `${p.logoPos === 'left' ? img : ''}${f.qr && a.serial ? `<div class="qr">${qrSvg(a.serial)}</div>` : ''}<div class="tx">${lines}</div>${p.logoPos !== 'left' ? img : ''}`;
+  const f = p.fields, logo = p.logo && db.settings.branding.logoId && db.images[db.settings.branding.logoId], qr = f.qr && qrValue(a, p);
+  const W = LABEL.w - 2 - (qr ? 15.5 : 0), H = LABEL.h - 2 - (logo ? 3 : 0), MM = .3528;
+  const fit = (text, mono, base, min) => {
+    const k = (mono ? .55 : .5) * MM, n = String(text).length, pt = Math.max(min, Math.min(base, W / (n * k)));
+    return {text, mono, pt, rows:Math.max(1, Math.ceil(n * k * pt / W))};
+  };
+  const rows = [f.tag && fit(a.tag, true, 6.5, 4.5), f.serial && a.serial && fit(a.serial, true, 6.5, 4.5), f.name && assetName(a) && fit(assetName(a), false, 5.5, 4.5),
+    f.model && modelName(a) && fit(modelName(a), false, 5.5, 4.5), f.type && fit(typeLabel(a.type), false, 5.5, 4.5)].filter(Boolean);
+  const need = rows.reduce((s, r) => s + r.rows * r.pt * MM * 1.12 + .2, 0), s = Math.max(.72, Math.min(1, H / (need || 1)));
+  const lines = rows.map(r => `<${r.mono ? 'b' : 'span'} style="font-size:${(r.pt * s).toFixed(2)}pt">${esc(r.text)}</${r.mono ? 'b' : 'span'}>`).join('');
+  const img = logo ? `<img class="lg" src="${logo}" alt="" style="align-self:${p.logoPos === 'left' ? 'flex-start' : 'flex-end'}">` : '';
+  return `${qr ? `<div class="qr">${qrSvg(qr)}</div>` : ''}<div class="tx">${img}${lines}</div>`;
 }
 function labelHtml(list, start, p){
   const per = LABEL.cols * LABEL.rows, slots = [...new Array(start - 1).fill(null), ...list], pages = [];
@@ -169,17 +179,18 @@ function labelDialog(ids){
   if (!list.length) return;
   let p = JSON.parse(JSON.stringify(curPreset()));
   const hasLogo = !!db.settings.branding.logoId, sample = list.find(a => a.serial) || list[0], manage = can('labels.presets');
-  const printable = () => p.fields.qr ? list.filter(a => (a.serial || '').trim()) : list;
+  const printable = () => p.fields.qr ? list.filter(a => qrValue(a, p)) : list;
   const paint = () => {
-    const missing = p.fields.qr ? list.filter(a => !(a.serial || '').trim()) : [];
+    const missing = p.fields.qr ? list.filter(a => !qrValue(a, p)) : [];
     $('#lblPrev').innerHTML = `<style>${LABEL_CSS}</style><div class="lbzoom"><div class="lb">${labelInner(sample, p)}</div></div>`;
     $('#lblMissing').hidden = !missing.length;
     $('#lblMissing').innerHTML = `⚠️ No Serial Number, so no QR code and no label: ${missing.map(a => `<a href="#/asset/${a.id}">${esc(a.tag)}</a>`).join(', ')}`;
+    $('#lQrNote').textContent = p.qrMode === 'link' ? (location.protocol === 'file:' ? 'This page is opened as a local file, so the link only works on this computer. Print link labels from the published site.' : 'Opens the asset page. A phone only finds the asset if its browser holds the same data.') : 'A scanner reads the Serial Number as text.';
     $('#lblCount').textContent = `${printable().length} label(s) · ${LABEL.w} × ${LABEL.h} mm · ${LABEL.cols * LABEL.rows} labels per A4 sheet`;
   };
   const fill = () => {
     for (const k of Object.keys(LABEL_FIELDS)) $('#lf_' + k).checked = !!p.fields[k];
-    $('#lLogo').checked = !!p.logo; $('#lPos').value = p.logoPos;
+    $('#lLogo').checked = !!p.logo; $('#lPos').value = p.logoPos; $('#lQr').value = p.qrMode || 'serial';
     for (const k of ['top', 'left', 'pitchX', 'pitchY']) $('#lg_' + k).value = p[k];
     paint();
   };
@@ -190,6 +201,7 @@ function labelDialog(ids){
       ${manage ? '<button type="button" class="sm" id="lSave">Save</button><button type="button" class="sm" id="lSaveAs">Save as new</button><button type="button" class="sm danger" id="lDel">Delete</button>' : ''}</div>
     <p id="lblCount"></p><div class="warnbox" id="lblMissing" hidden></div>
     <label class="f">Fields on the label</label><div class="grid" style="grid-template-columns:repeat(3,1fr);gap:0 8px">${Object.entries(LABEL_FIELDS).map(([k, l]) => `<label class="cb" style="margin:4px 0"><input type="checkbox" id="lf_${k}"> ${l}</label>`).join('')}</div>
+    <label class="f">QR code content</label><select id="lQr" style="width:100%"><option value="serial">Serial Number</option><option value="link">Link to the asset page</option></select><small class="muted" id="lQrNote"></small>
     <div class="two"><div><label class="cb"><input type="checkbox" id="lLogo"${hasLogo ? '' : ' disabled'}> Company logo</label>${hasLogo ? '' : '<small class="muted">Set a logo in Admin Panel → Branding.</small>'}</div>
       <div><label class="f">Logo position</label><select id="lPos"><option value="right">Right</option><option value="left">Left</option></select></div></div>
     <label class="f">Preview</label><div id="lblPrev"></div>
@@ -204,6 +216,7 @@ function labelDialog(ids){
   for (const k of Object.keys(LABEL_FIELDS)) $('#lf_' + k).addEventListener('change', e => { p.fields[k] = e.target.checked; paint(); });
   $('#lLogo').addEventListener('change', e => { p.logo = e.target.checked; paint(); });
   $('#lPos').addEventListener('change', e => { p.logoPos = e.target.value; paint(); });
+  $('#lQr').addEventListener('change', e => { p.qrMode = e.target.value; paint(); });
   for (const k of ['top', 'left', 'pitchX', 'pitchY']) $('#lg_' + k).addEventListener('change', e => { p[k] = +e.target.value; });
   $('#lPreset').addEventListener('change', e => { db.settings.labelPresetId = e.target.value; p = JSON.parse(JSON.stringify(curPreset())); save(); fill(); });
   if (manage){
@@ -224,4 +237,56 @@ function labelDialog(ids){
     });
   }
   fill();
+}
+
+// ---------- Scan QR Code ----------
+// what a scan or a typed value points to: an asset link, an Asset ID, a legacy ID or a Serial Number, always an exact match
+function resolveScan(text){
+  const t = String(text || '').trim();
+  if (!t) return {err:'Enter or scan a value.'};
+  const m = /#\/asset\/([\w-]+)\s*$/.exec(t);
+  if (m){ const a = asset(m[1]); return a ? {a} : {err:'This QR code points to an asset that is not in this browser.'}; }
+  if (/^[a-z]+:\/\//i.test(t)) return {err:'This QR code does not belong to an asset.'};
+  const n = norm(t), hits = db.assets.filter(a => [a.tag, a.serial, a.legacyTag].some(v => v && norm(v) === n));
+  if (hits.length === 1) return {a:hits[0]};
+  if (hits.length > 1) return {err:'Several assets share this value:', hits};
+  return {err:`No asset found for “${t}”.`};
+}
+function scanDialog(){
+  const dlg = $('#dlg'), api = 'BarcodeDetector' in window, cam = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && window.isSecureContext;
+  let stream = null, stop = false, lastBad = '';
+  openDialog(`<h3>📷 Scan QR Code</h3>
+    <div id="scanCam"${api && cam ? '' : ' hidden'}><video id="scanVid" playsinline muted class="scanvid"></video></div>
+    <div id="scanInfo" class="warnbox"${api && cam ? ' hidden' : ''}>${!cam ? 'The camera needs a secure HTTPS page and browser support.' : 'This browser cannot read QR codes on a page.'} Type the value below. On a phone, the camera app can open link QR codes directly.</div>
+    <div id="scanMsg"></div>
+    <label class="f">Asset ID, Serial Number or scanned text</label>
+    <div class="row"><input id="scanText" style="flex:1;min-width:200px" autocomplete="off"><button type="button" id="scanFind">Find</button></div>
+    <div class="actions"><button value="cancel" formnovalidate>Close</button></div>`, () => false);
+  const end = () => { stop = true; if (stream) stream.getTracks().forEach(t => t.stop()); stream = null; };
+  dlg.addEventListener('close', end, {once:true});
+  const go = text => {
+    const r = resolveScan(text);
+    if (r.a){ dlg.close(); location.hash = '#/asset/' + r.a.id; return true; }
+    $('#scanMsg').innerHTML = `<div class="errbox">${esc(r.err)}${r.hits ? ' ' + r.hits.map(a => `<a href="#/asset/${a.id}">${esc(a.tag)}</a>`).join(', ') : ''}</div>`;
+    return false;
+  };
+  $('#scanFind').addEventListener('click', () => go($('#scanText').value));
+  $('#scanText').addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); go(e.target.value); } });
+  if (!api || !cam) return;
+  (async () => {
+    try {
+      const det = new BarcodeDetector({formats:['qr_code']}), vid = $('#scanVid');
+      stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+      if (stop){ end(); return; }
+      vid.srcObject = stream; await vid.play();
+      while (!stop){
+        const [hit] = await det.detect(vid).catch(() => []);
+        if (hit && hit.rawValue !== lastBad && !stop){ if (go(hit.rawValue)) return; lastBad = hit.rawValue; }
+        await new Promise(r => setTimeout(r, 300));
+      }
+    } catch(e){
+      $('#scanCam').hidden = true; $('#scanInfo').hidden = false;
+      $('#scanInfo').textContent = e.name === 'NotAllowedError' ? 'Camera access was refused. Type the value below instead.' : 'The camera could not be started. Type the value below instead.';
+    }
+  })();
 }

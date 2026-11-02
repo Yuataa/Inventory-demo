@@ -4,6 +4,8 @@
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+// every word has to appear, in any order: "dell debrecen" finds a Dell at the Debrecen office
+const matchWords = (text, q) => { const t = norm(text); return norm(q).split(/\s+/).filter(Boolean).every(w => t.includes(w)); };
 const sortHu = (arr, f) => arr.slice().sort((a, b) => String(f(a)).localeCompare(String(f(b)), 'hu', {numeric:true}));
 const fmtTime = ts => new Date(ts).toLocaleString('en-GB', {year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
 const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -35,8 +37,9 @@ async function copyText(t){
 document.addEventListener('click', e => { const b = e.target.closest('[data-copy]'); if (b){ e.preventDefault(); e.stopPropagation(); copyText(b.dataset.copy); } });
 
 // ---------- dialog ----------
-function openDialog(html, onSubmit){
+function openDialog(html, onSubmit, o = {}){
   const dlg = $('#dlg'), form = $('#dlgForm');
+  dlg.classList.toggle('wide', !!o.wide);
   form.innerHTML = html;
   form.onsubmit = e => {
     const btn = e.submitter;
@@ -66,22 +69,97 @@ function askConfirm(title, html, ok = 'Confirm'){
   });
 }
 
-// ---------- searchable picker: a filter box above a list, with optional Service / Work Mode / Office filters ----------
-const holderFilters = () => `<select class="pick-f" data-k="svc" title="Service"><option value="">All Services</option>${sortHu(db.services, s => s.name).map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
-  <select class="pick-f" data-k="mode" title="Work Mode"><option value="">All Work Modes</option>${db.modes.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select>
-  <select class="pick-f" data-k="office" title="Office"><option value="">All Offices</option>${sortHu(db.offices.filter(o => scopeOfficeIds().includes(o.id)), o => o.name).map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select>`;
-const picker = (name, optionsHtml, o = {}) => `<div class="picker">${o.filters ? `<div class="pick-row">${holderFilters()}</div>` : ''}<input type="search" class="pick-q" placeholder="Search the list…">
+// ---------- searchable picker: a filter box above a list ----------
+const picker = (name, optionsHtml, o = {}) => `<div class="picker"><input type="search" class="pick-q" placeholder="Search the list…">
   <select class="pick-list" name="${name}"${o.id ? ` id="${o.id}"` : ''} size="${o.size || 7}"${o.required ? ' required' : ''}>${optionsHtml}</select></div>`;
 function applyPicker(wrap){
-  const sel = wrap.querySelector('.pick-list'), q = norm(wrap.querySelector('.pick-q').value);
-  const fs = [...wrap.querySelectorAll('.pick-f')].filter(f => f.value);
-  for (const o of sel.options) o.hidden = (!!q && !norm(o.textContent + ' ' + (o.parentElement.label || '')).includes(q)) || (o.value !== '' && fs.some(f => o.dataset[f.dataset.k] !== f.value));
+  const sel = wrap.querySelector('.pick-list'), q = wrap.querySelector('.pick-q').value;
+  for (const o of sel.options) o.hidden = !!q.trim() && !matchWords(o.textContent + ' ' + (o.parentElement.label || ''), q);
   for (const g of sel.querySelectorAll('optgroup')) g.hidden = ![...g.children].some(o => !o.hidden);
   const first = [...sel.options].find(o => !o.hidden);
   if (first && (!sel.selectedOptions[0] || sel.selectedOptions[0].hidden)) sel.value = first.value;
 }
 document.addEventListener('input', e => { if (e.target.classList.contains('pick-q')) applyPicker(e.target.closest('.picker')); });
-document.addEventListener('change', e => { if (e.target.classList.contains('pick-f')) applyPicker(e.target.closest('.picker')); });
+
+// ---------- searchable dropdown: every long <select> opens this list instead of the native one.
+// The select stays the only source of truth, so values, change handlers, validation and permissions work as before. ----------
+const COMBO_MIN = 7;
+const comboFor = s => s.matches('select:not([multiple]):not([size]):not(:disabled)') && (s.options.length >= COMBO_MIN || s.classList.contains('combo'));
+let combo = null;
+function closeCombo(refocus){
+  if (!combo) return;
+  const {el, sel} = combo; combo = null; el.remove();
+  if (refocus) sel.focus();
+}
+function paintCombo(){
+  const {sel, el} = combo, q = el.querySelector('input').value, list = el.querySelector('.combo-list');
+  const rows = [...sel.options].filter(o => !o.hidden && (!q.trim() || matchWords(o.textContent + ' ' + (o.parentElement.label || ''), q)));
+  combo.rows = rows.filter(o => !o.disabled);
+  combo.act = Math.max(0, combo.rows.findIndex(o => o.selected && !q.trim()));
+  let grp = '';
+  list.innerHTML = rows.map(o => {
+    const g = o.parentElement.label || '', head = g !== grp && g ? `<div class="combo-grp">${esc(g)}</div>` : ''; grp = g;
+    return `${head}<div class="combo-opt${o.disabled ? ' off' : ''}${o.selected ? ' on' : ''}" role="option" data-i="${o.index}">${esc(o.textContent)}</div>`;
+  }).join('') || `<div class="empty" style="padding:12px">No matches for “${esc(q)}”.</div>`;
+  markCombo();
+}
+function markCombo(){
+  const {rows, act, el} = combo, cur = rows[act];
+  el.querySelectorAll('.combo-opt').forEach(d => {
+    const on = !!cur && +d.dataset.i === cur.index;
+    d.classList.toggle('act', on); if (on) d.scrollIntoView({block:'nearest'});
+  });
+}
+function pickCombo(o){
+  const {sel} = combo;
+  closeCombo(true);
+  if (!o || sel.value === o.value) return;
+  sel.value = o.value;
+  sel.dispatchEvent(new Event('input', {bubbles:true})); sel.dispatchEvent(new Event('change', {bubbles:true}));
+}
+function openCombo(sel, typed = ''){
+  closeCombo();
+  const el = document.createElement('div'), r = sel.getBoundingClientRect(), w = Math.min(Math.max(r.width, 280), innerWidth - 16);
+  el.className = 'combo-pop';
+  el.innerHTML = `<input type="search" placeholder="Type to search…" autocomplete="off" aria-label="Search the list"><div class="combo-list" role="listbox"></div>`;
+  el.style.width = w + 'px'; el.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px';
+  (sel.closest('dialog') || document.body).appendChild(el);
+  combo = {sel, el, rows:[], act:0};
+  const inp = el.querySelector('input'); inp.value = typed;
+  paintCombo();
+  const below = innerHeight - r.bottom > el.offsetHeight + 8 || r.top < el.offsetHeight + 8;
+  el.style.top = (below ? Math.min(r.bottom + 2, innerHeight - el.offsetHeight - 8) : r.top - el.offsetHeight - 2) + 'px';
+  inp.addEventListener('input', paintCombo);
+  inp.addEventListener('keydown', e => {
+    const n = combo.rows.length;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){ e.preventDefault(); if (n){ combo.act = (combo.act + (e.key === 'ArrowDown' ? 1 : -1) + n) % n; markCombo(); } }
+    else if (e.key === 'Home' || e.key === 'End'){ if (n){ e.preventDefault(); combo.act = e.key === 'Home' ? 0 : n - 1; markCombo(); } }
+    else if (e.key === 'Enter'){ e.preventDefault(); e.stopPropagation(); if (n) pickCombo(combo.rows[combo.act]); }
+    else if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); closeCombo(true); }
+    else if (e.key === 'Tab') closeCombo();
+  });
+  // the press is taken here so the input keeps the focus until the choice is made
+  el.addEventListener('mousedown', e => {
+    if (e.target === inp) return;
+    e.preventDefault();
+    const d = e.target.closest('.combo-opt:not(.off)');
+    if (d) pickCombo(sel.options[+d.dataset.i]);
+  });
+  inp.focus();
+}
+document.addEventListener('mousedown', e => {
+  const s = e.target.closest && e.target.closest('select');
+  if (combo && !e.target.closest('.combo-pop')){ const same = combo.sel === s; closeCombo(); if (same){ e.preventDefault(); return; } }
+  if (s && e.button === 0 && comboFor(s)){ e.preventDefault(); s.focus(); openCombo(s); }
+}, true);
+document.addEventListener('keydown', e => {
+  const s = e.target;
+  if (s.tagName !== 'SELECT' || !comboFor(s) || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (['Enter', ' ', 'ArrowDown', 'ArrowUp'].includes(e.key)){ e.preventDefault(); openCombo(s); }
+  else if (e.key.length === 1){ e.preventDefault(); openCombo(s, e.key); }
+}, true);
+window.addEventListener('resize', () => closeCombo());
+document.addEventListener('scroll', e => { if (combo && !combo.el.contains(e.target)) closeCombo(); }, true);
 // every place an asset can go: storage, people, office pools, desks
 // only the people and places of one country: moving further away is a shipment
 function holderOptions(current, o = {}){
@@ -89,7 +167,7 @@ function holderOptions(current, o = {}){
   const sel = v => v === current ? ' selected' : '';
   let h = o.noStorage ? '' : `<option value="storage"${sel('storage')}>📦 In Stock</option>`;
   h += '<optgroup label="Assign to a person">' + sortHu(db.people.filter(p => (office(p.officeId) || {}).countryId === cid), p => p.name).map(p =>
-    `<option value="person:${p.id}" data-svc="${p.serviceId || ''}" data-mode="${esc(p.mode)}"${sel('person:' + p.id)}>👤 ${esc(p.name)} – ${esc(serviceName(p.serviceId) || 'no Service')} · ${esc(modeName(p.mode))}${p.status !== 'Active' ? ' · ' + p.status : ''}</option>`).join('') + '</optgroup>';
+    `<option value="person:${p.id}"${sel('person:' + p.id)}>👤 ${esc(p.name)} – ${esc(serviceName(p.serviceId) || 'no Service')} · ${esc(officeLabel(p.officeId))} · ${esc(modeName(p.mode))}${p.status !== 'Active' ? ' · ' + p.status : ''}</option>`).join('') + '</optgroup>';
   const offices = sortHu(db.rooms.filter(r => ids.includes(r.officeId)), r => roomPath(r));
   h += '<optgroup label="Office, not placed yet">' + sortHu(db.offices.filter(x => ids.includes(x.id)), x => x.name).map(o => `<option value="site:${o.id}" data-office="${o.id}"${sel('site:' + o.id)}>🏢 ${esc(o.name)}</option>`).join('') + '</optgroup>';
   if (offices.length) h += '<optgroup label="Room pool (not on a desk)">' + offices.map(r =>
@@ -175,6 +253,11 @@ function updateBulk(){
     bar.hidden = !selected.size;
     const hidden = [...selected].filter(id => !boxes.some(b => b.dataset.id === id)).length;
     bar.querySelectorAll('.bulkCount').forEach(s => s.textContent = selected.size + (hidden ? ` (${hidden} hidden by the filter)` : ''));
+    // an action stays active only if it can do something for at least one selected asset
+    const list = [...selected].map(asset).filter(Boolean), at = (a, k) => canAt(k, a.officeId), free = a => a.holder.kind !== 'transit';
+    const set = (sel, ok, why) => { const b = bar.querySelector(sel); if (b){ b.disabled = !ok; b.title = ok ? '' : why; } };
+    set('[data-bulk=assign]', list.some(a => free(a) && (at(a, 'assets.assign') || at(a, 'assets.move'))), 'Nothing here can be assigned: the selected assets are in transit, or you lack permission.');
+    set('[data-bulk=return]', list.some(a => free(a) && a.holder.kind !== 'storage' && at(a, 'assets.move')), 'Nothing to return: the selected assets are in stock or in transit, or you lack permission.');
   }
 }
 document.addEventListener('change', e => {
@@ -187,25 +270,39 @@ document.addEventListener('change', e => {
 });
 
 // ---------- asset table ----------
+// one definition per column, so the customized table and the fixed tables render the same cells
+const clipCell = t => t ? `<td title="${esc(t)}"><div class="clip">${esc(t)}</div></td>` : '<td><span class="muted">–</span></td>';
+const ASSET_COLS = {
+  tag:{label:'Asset ID', cell:a => { const res = reservedBy(a.id), ret = openReturnOf(a.id);
+    return `<td>${aidLink(a)}${copyBtn(a.tag)}${res ? `<br><a class="pill acc" href="#/project/${res.project.id}" title="Reserved for a project">📋 ${esc(res.project.name)}</a>` : ''}${ret ? `<br><span class="pill ${returnCls(ret)}" title="${esc(returnDue(ret) ? 'Due ' + returnDue(ret) : 'No deadline set')}">↩ Awaiting Return</span>` : ''}</td>`; }},
+  name:{label:'Asset Name', cell:a => `<td><a href="#/asset/${a.id}">${esc(assetName(a))}</a></td>`},
+  type:{label:'Type', cell:a => `<td>${typeLink(a)}</td>`},
+  model:{label:'Model', cell:a => `<td>${modelLink(a)}</td>`},
+  serial:{label:'Serial Number', cell:a => `<td class="muted serial" data-v="${esc(a.serial)}">${esc(a.serial)}${a.serial ? copyBtn(a.serial) : ''}</td>`},
+  status:{label:'Status', cell:a => `<td>${statusPill(a.status)}${isAged(a) ? ' <span class="pill warn">Aged</span>' : ''}</td>`},
+  warranty:{label:'Warranty', cell:a => `<td data-v="${esc(a.warrantyUntil || '')}">${warrantyPill(a)}</td>`},
+  location:{label:'Location', cell:a => `<td>${whereLink(a)}</td>`},
+  country:{label:'Country', cell:a => `<td>${esc(officeCountry(a.officeId).name || '–')}</td>`},
+  office:{label:'City / Office', cell:a => `<td>${esc(officeLabel(a.officeId))}</td>`},
+  note:{label:'Notes', cell:a => clipCell(a.note)},
+  service:{label:'Service', cell:a => `<td>${esc(serviceName(a.serviceId || (assetPerson(a) || {}).serviceId) || '–')}</td>`},
+  person:{label:'Assigned To', cell:a => `<td>${assetPerson(a) ? personLink(a.holder.id) : '<span class="muted">–</span>'}</td>`},
+  supplier:{label:'Supplier', cell:a => clipCell(a.supplier)},
+  orderNo:{label:'Order / Invoice', cell:a => clipCell(a.orderNo)},
+  arrived:{label:'Order Arrived', cell:a => `<td style="white-space:nowrap">${esc(fmtDate(a.arrived))}</td>`},
+  legacy:{label:'Legacy ID', cell:a => clipCell(a.legacyTag)},
+};
+const DEFAULT_COLS = ['tag', 'name', 'type', 'model', 'serial', 'status', 'warranty', 'location', 'country', 'office'];
 function assetRows(list, opts = {}){
   if (!list.length) return `<div class="empty">No assets.</div>`;
-  return `<div class="tbl-wrap"><table><thead><tr>${opts.select ? '<th class="sel"><input type="checkbox" id="selAll" title="Select all"></th>' : ''}<th></th><th>Asset ID</th><th>Asset Name</th><th>Type</th><th>Model</th><th>Serial Number</th><th>Status</th><th>Warranty</th>${opts.noLoc ? '' : '<th>Location</th><th>Country</th><th>City / Office</th>'}${opts.actions ? '<th></th>' : ''}</tr></thead><tbody>` +
-    list.map(a => {
-      const res = reservedBy(a.id), ret = openReturnOf(a.id);
-      return `<tr${selected.has(a.id) ? ' class="picked"' : ''}>
+  const cols = opts.cols || (opts.noLoc ? DEFAULT_COLS.slice(0, 7) : DEFAULT_COLS);
+  return `<div class="tbl-wrap"><table class="atable"><thead><tr>${opts.select ? '<th class="sel"><input type="checkbox" id="selAll" title="Select all"></th>' : ''}<th></th>${cols.map(c => `<th>${ASSET_COLS[c].label}</th>`).join('')}${opts.actions ? '<th></th>' : ''}</tr></thead><tbody>` +
+    list.map(a => `<tr${selected.has(a.id) ? ' class="picked"' : ''}>
       ${opts.select ? `<td class="sel"><input type="checkbox" class="selbox" data-id="${a.id}"${selected.has(a.id) ? ' checked' : ''}></td>` : ''}
       <td style="width:40px">${assetIcon(a)}</td>
-      <td>${aidLink(a)}${copyBtn(a.tag)}${res ? `<br><a class="pill acc" href="#/project/${res.project.id}" title="Reserved for a project">📋 ${esc(res.project.name)}</a>` : ''}${ret ? `<br><span class="pill ${returnCls(ret)}" title="${esc(returnDue(ret) ? 'Due ' + returnDue(ret) : 'No deadline set')}">↩ Awaiting Return</span>` : ''}</td>
-      <td><a href="#/asset/${a.id}">${esc(assetName(a))}</a></td>
-      <td>${typeLink(a)}</td>
-      <td>${modelLink(a)}</td>
-      <td class="muted" style="white-space:nowrap" data-v="${esc(a.serial)}">${esc(a.serial)}${a.serial ? copyBtn(a.serial) : ''}</td>
-      <td>${statusPill(a.status)}${isAged(a) ? ' <span class="pill warn">Aged</span>' : ''}</td>
-      <td data-v="${esc(a.warrantyUntil || '')}">${warrantyPill(a)}</td>
-      ${opts.noLoc ? '' : `<td>${whereLink(a)}</td><td>${esc(officeCountry(a.officeId).name || '–')}</td><td>${esc(officeLabel(a.officeId))}</td>`}
+      ${cols.map(c => ASSET_COLS[c].cell(a)).join('')}
       ${opts.actions ? `<td style="text-align:right;white-space:nowrap">${opts.actions(a)}</td>` : ''}
-    </tr>`;
-    }).join('') + '</tbody></table></div>';
+    </tr>`).join('') + '</tbody></table></div>';
 }
 
 // ---------- logs ----------

@@ -23,6 +23,7 @@ function render(){
   const params = new URLSearchParams(qs || '');
   const r = parts[0] || '';
   const v = $('#view');
+  closeCombo();
   fpLeaveCheck(path);
   // flash the object once when arriving from somewhere else (e.g. from an asset page)
   flashObj = r === 'room' && parts[2] && !lastRoute.startsWith('room/' + parts[1]) ? parts[2] : null;

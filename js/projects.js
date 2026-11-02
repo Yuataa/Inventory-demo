@@ -26,7 +26,7 @@ function projectTasks(pr){
     t.push({label:'Asset Assignment', done:n > 0, detail:n ? `${n} participant(s) with assets` : 'no asset selected for any participant'});
   }
   if (hasAct(pr, 'replacement')){
-    const open = pr.replacements.filter(r => (repReturn(pr, r) || {}).state === 'awaiting').length;
+    const open = pr.replacements.filter(r => repState(pr, r) === 'awaiting').length;
     t.push({label:'Replacement', done:pr.replacements.length > 0, detail:pr.replacements.length ? `${pr.replacements.length} replacement(s)${open ? `, ${open} old asset(s) still awaited (does not block)` : ''}` : 'no replacement added yet'});
   }
   return t;
@@ -115,7 +115,7 @@ function bindProjects(){
 }
 function projectForm(pr){
   const isNew = !pr;
-  pr = pr || {name:'', owner:currentUser(), pickupDate:'', ticket:'', note:'', status:'planning', targetServiceId:null, targetRoomId:null, accessories:'', activities:[]};
+  pr = pr || {name:'', owner:(currentPerson() || {}).name || currentUser(), pickupDate:'', ticket:'', note:'', status:'planning', targetServiceId:null, targetRoomId:null, accessories:'', activities:[]};
   const tmp = {participants:[], demand:[], replacements:[]};
   // a block is shown only when one of the activities in data-act is selected
   const block = (acts, html) => `<div data-act="${acts}">${html}</div>`;
@@ -204,17 +204,23 @@ function demandHtml(pr, ro){
     ${pr.demand.length ? `<div class="tbl-wrap"><table><thead><tr><th>Asset Type</th><th>Planned quantity</th><th>Selected assets (reserved)</th><th>Issued</th>${ro ? '' : '<th></th>'}</tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No demand recorded. Use it when only the quantities are known.</div>'}`;
 }
 const repReturn = (pr, r) => db.returns.filter(x => x.assetId === r.oldId && x.personId === r.personId && x.projectId === pr.id).pop();
+// a Service has no person to get a return from: its old asset counts as back once it is in stock
+function repState(pr, r){
+  if (r.personId){ const x = repReturn(pr, r); return x ? x.state : 'notRequired'; }
+  const old = asset(r.oldId);
+  return r.ret === 'notRequired' ? 'notRequired' : old && old.holder.kind === 'storage' ? 'returned' : 'awaiting';
+}
 function replacementHtml(pr){
   const rows = pr.replacements.map(r => {
-    const ret = repReturn(pr, r), old = asset(r.oldId), nw = r.newId && asset(r.newId), st = ret ? ret.state : 'notRequired';
-    return `<tr><td>${personLink(r.personId)}</td><td>${old ? `${aidLink(old)}<br><small class="muted">${esc(assetName(old))}</small>` : '<span class="muted">deleted</span>'}</td>
+    const ret = repReturn(pr, r), old = asset(r.oldId), nw = r.newId && asset(r.newId), st = repState(pr, r), cls = ret ? returnCls(ret) : {awaiting:'warn', returned:'ok'}[st] || '';
+    return `<tr><td>${r.personId ? personLink(r.personId) : `🧩 ${esc(serviceName(r.serviceId) || '?')}`}${r.ticket ? `<br><span class="tag">${esc(r.ticket)}</span>` : ''}${r.note ? `<br><small class="muted">${esc(r.note)}</small>` : ''}</td><td>${old ? `${aidLink(old)}<br><small class="muted">${esc(assetName(old))}</small>` : '<span class="muted">deleted</span>'}</td>
       <td>${nw ? `${aidLink(nw)}<br><small class="muted">${esc(assetName(nw))}</small>` : '<span class="muted">–</span>'}</td>
-      <td><span class="pill ${ret ? returnCls(ret) : ''}" data-rep-state="${r.id}">${RETURN_STATE[st]}</span>${ret ? returnBadge(ret) : ''}${ret && ret.closedAt ? `<br><small class="muted">${fmtTime(ret.closedAt)}</small>` : ''}</td>
+      <td><span class="pill ${cls}" data-rep-state="${r.id}">${RETURN_STATE[st]}</span>${ret ? returnBadge(ret) : ''}${ret && ret.closedAt ? `<br><small class="muted">${fmtTime(ret.closedAt)}</small>` : ''}</td>
       <td style="text-align:right;white-space:nowrap">${st === 'awaiting' && old ? `<button class="sm primary" onclick="toStorage('${old.id}')">↩ Record return</button> <button class="sm" onclick="setRepState('${pr.id}','${r.id}','notRequired')">Not Required</button>` : ''}
         ${st === 'notRequired' && old ? `<button class="sm" onclick="setRepState('${pr.id}','${r.id}','awaiting')">Expect return</button>` : ''}</td></tr>`;
   }).join('');
   return `<div class="row"><h2>🔁 Replacements</h2><span class="spacer"></span><button class="sm" onclick="replacementDialog('${pr.id}')">+ Replacement</button></div>
-    ${pr.replacements.length ? `<div class="tbl-wrap"><table><thead><tr><th>Recipient</th><th>Old asset</th><th>Replacement asset</th><th>Return</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${pr.replacements.length ? `<div class="tbl-wrap"><table><thead><tr><th>Target</th><th>Old asset (comes back)</th><th>New asset (handed over)</th><th>Return</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
       <p class="muted" style="font-size:12px">“Returned” is set only by the real return. The project can be completed while an old asset is still on its way back.</p>` : '<div class="empty">No replacements in this project.</div>'}`;
 }
 const shipOffice = id => (office(id) || {}).name || '–';
@@ -377,36 +383,60 @@ function addParticipant(prId, personId){
 }
 function replacementDialog(prId){
   const pr = project(prId);
-  const heldBy = pid => personAssets(pid).direct.filter(a => !pr.replacements.some(r => r.oldId === a.id));
+  const free = a => !pr.replacements.some(r => r.oldId === a.id);
+  const heldBy = pid => personAssets(pid).direct.filter(free);
+  // a Service holds an asset through the asset's own Service link; stock is not in use, so there is nothing to replace
+  const ofService = sid => db.assets.filter(a => a.serviceId === sid && !['person', 'storage', 'transit'].includes(a.holder.kind) && free(a));
   const people = sortHu(db.people.filter(p => personAssets(p.id).direct.length), p => (pr.participants.some(x => x.personId === p.id) ? '0' : '1') + p.name);
-  if (!people.length){ alert('Nobody holds an asset that could be replaced.'); return; }
+  const services = sortHu(db.services.filter(s => ofService(s.id).length), s => s.name);
+  if (!people.length && !services.length){ alert('Nobody holds an asset that could be replaced.'); return; }
   const newOpts = sortHu(db.assets.filter(a => a.status === 'ok' && ['storage', 'site'].includes(a.holder.kind) && !reservedBy(a.id)), a => a.tag);
+  const oldsOf = () => $('#repKind').value === 'service' ? ofService($('#repS').value) : heldBy($('#repP').value);
   openDialog(`<h3>🔁 Replacement</h3>
-    <label class="f">Recipient</label><select name="personId" id="repP">${selOpts(people, null, p => p.name)}</select>
-    <label class="f">Old assets</label><div class="checklist" id="repOld"></div>
-    <label class="f">Replacement asset (optional, reserved until completion)</label>
-    ${picker('newId', `<option value="">– none –</option>` + newOpts.map(a => `<option value="${a.id}">${typeIcon(a.type)} ${esc(a.tag)} · ${esc(assetName(a))}</option>`).join(''), {size:5})}
+    <div class="two"><div><label class="f">Target type</label><select name="kind" id="repKind"><option value="person">Person</option>${services.length ? '<option value="service">Service</option>' : ''}</select></div>
+      <div><div id="repPW"><label class="f">Person</label><select name="personId" id="repP" class="combo">${selOpts(people, null, p => `${p.name} – ${serviceName(p.serviceId) || 'no Service'}`)}</select></div>
+      <div id="repSW" hidden><label class="f">Service</label><select name="serviceId" id="repS" class="combo">${selOpts(services, null, s => s.name)}</select></div></div></div>
+    <label class="f">Old assets (come back)</label><div class="checklist" id="repOld"></div>
+    <label class="f">New asset (optional, reserved until completion)</label>
+    <select name="newId" class="combo" style="width:100%"><option value="">– none –</option>${newOpts.map(a => `<option value="${a.id}">${typeIcon(a.type)} ${esc(a.tag)} · ${esc(assetName(a))}</option>`).join('')}</select>
     <div class="two"><div><label class="f">Return of the old asset</label><select name="ret"><option value="awaiting">Awaiting Return</option><option value="notRequired">Not Required</option></select></div>
-      <div><label class="f">Return deadline (optional)</label><input type="date" name="due"></div></div>
-    ${dlgActions('Add')}`,
+      <div><label class="f">Return deadline (optional)</label><input type="date" name="due"></div>
+      <div><label class="f">Ticket (optional)</label><input name="ticket" value="${esc(pr.ticket || '')}"></div>
+      <div><label class="f">Note (optional)</label><input name="note"></div></div>
+    ${dlgActions('Continue')}`,
     data => {
-      const olds = heldBy(data.personId).filter(a => data['old_' + a.id]);
+      const isSvc = data.kind === 'service', olds = oldsOf().filter(a => data['old_' + a.id]), nw = data.newId && asset(data.newId);
       if (!olds.length){ alert('Choose at least one old asset.'); return false; }
-      olds.forEach((old, i) => {
-        const rep = {id:uid(), personId:data.personId, oldId:old.id, newId:i === 0 ? data.newId || null : null, ts:Date.now()};
-        pr.replacements.push(rep);
-        const r = openReturn(old.id, data.personId, 'project', {projectId:pr.id, due:data.due});
-        if (data.ret === 'notRequired') setReturnState(r, 'notRequired');
-        plog(pr.id, `Replacement added – ${(person(data.personId) || {}).name}: ${old.tag}${rep.newId ? ' → ' + asset(rep.newId).tag : ''} (${RETURN_STATE[data.ret]})`);
+      if (isSvc && nw && olds.some(o => o.officeId !== nw.officeId)){ alert(`${nw.tag} is at another office than the old asset. Move it there with a Shipment first.`); return false; }
+      const label = isSvc ? serviceName(data.serviceId) : (person(data.personId) || {}).name, ticket = data.ticket.trim(), note = data.note.trim();
+      askConfirm('Confirm the replacement', `<dl class="kv card"><dt>Target</dt><dd><b>${esc(label)}</b> <small class="muted">${isSvc ? 'Service' : 'Person'}</small></dd>
+        <dt>Old asset(s), come back</dt><dd>${olds.map(o => `<b class="tag">${esc(o.tag)}</b> ${esc(assetName(o))}`).join('<br>')}</dd>
+        <dt>New asset, handed over</dt><dd>${nw ? `<b class="tag">${esc(nw.tag)}</b> ${esc(assetName(nw))}` : '–'}</dd>
+        <dt>Return</dt><dd>${RETURN_STATE[data.ret]}</dd>${ticket ? `<dt>Ticket</dt><dd>${esc(ticket)}</dd>` : ''}${note ? `<dt>Note</dt><dd>${esc(note)}</dd>` : ''}</dl>`, 'Add replacement').then(ok => {
+        if (!ok) return;
+        olds.forEach((old, i) => {
+          const rep = {id:uid(), personId:isSvc ? null : data.personId, serviceId:isSvc ? data.serviceId : null, oldId:old.id, newId:i === 0 ? data.newId || null : null, ticket, note, ts:Date.now()};
+          pr.replacements.push(rep);
+          if (isSvc) rep.ret = data.ret;
+          else { const r = openReturn(old.id, data.personId, 'project', {projectId:pr.id, due:data.due, ticket}); if (data.ret === 'notRequired') setReturnState(r, 'notRequired'); }
+          plog(pr.id, `Replacement added – ${label}: ${old.tag}${rep.newId ? ' → ' + asset(rep.newId).tag : ''} (${RETURN_STATE[data.ret]})`);
+        });
+        $('#dlg').close(); save(); render();
       });
-      save(); render();
+      return false;
     });
-  const fill = () => { $('#repOld').innerHTML = heldBy($('#repP').value).map(a => `<label><input type="checkbox" name="old_${a.id}"> <b class="tag">${esc(a.tag)}</b> ${esc(assetName(a))}</label>`).join('') || '<span class="muted">No further assets.</span>'; };
-  $('#repP').addEventListener('change', fill); fill();
+  const fill = () => {
+    const s = $('#repKind').value === 'service';
+    $('#repPW').hidden = s; $('#repSW').hidden = !s;
+    $('#repOld').innerHTML = oldsOf().map(a => `<label><input type="checkbox" name="old_${a.id}"> <b class="tag">${esc(a.tag)}</b> ${esc(assetName(a))}</label>`).join('') || '<span class="muted">No further assets.</span>';
+  };
+  for (const id of ['#repKind', '#repP', '#repS']) $(id).addEventListener('change', fill);
+  fill();
 }
 function setRepState(prId, repId, state){
   const pr = project(prId), rep = pr.replacements.find(r => r.id === repId), r = repReturn(pr, rep);
-  if (r){ setReturnState(r, state); plog(pr.id, `Return of ${(asset(rep.oldId) || {}).tag || '?'}: ${RETURN_STATE[state]}`); save(); render(); }
+  if (r) setReturnState(r, state); else if (rep.serviceId) rep.ret = state; else return;
+  plog(pr.id, `Return of ${(asset(rep.oldId) || {}).tag || '?'}: ${RETURN_STATE[state]}`); save(); render();
 }
 // assets in an open shipment cannot be picked for another one
 const inOpenShipment = id => db.projects.some(pr => pr.shipments.some(s => s.status !== 'Received' && s.assetIds.includes(id)));
@@ -418,14 +448,15 @@ function shipCandidates(pr, fromId){
 function shipFields(){
   const ppl = sortHu(db.people, p => p.name), cs = sortHu(db.countries, c => c.name);
   const cOpts = `<option value="">– none –</option>` + cs.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
-  const pOpts = `<option value="">– none –</option>` + ppl.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const me = currentPerson(), pOpts = cur => `<option value="">– none –</option>` + ppl.map(p => `<option value="${p.id}"${p.id === cur ? ' selected' : ''}>${esc(p.name)}</option>`).join('');
   return `<div class="two">
     <div><label class="f">Sending Country</label><select id="shFromC">${cOpts}</select></div>
     <div><label class="f">Receiving Country</label><select id="shToC">${cOpts}</select></div>
     <div><label class="f">Sending Office</label><select name="from" id="shFrom"><option value="">– none –</option></select></div>
     <div><label class="f">Receiving Office</label><select name="to" id="shTo"><option value="">– none –</option></select></div>
-    <div><label class="f">Sending Person</label><select name="sendP">${pOpts}</select></div>
-    <div><label class="f">Receiving Person</label><select name="recvP">${pOpts}</select></div></div>
+    <div><label class="f">Sending Person</label><select name="sendP">${pOpts(me && me.id)}</select></div>
+    <div><label class="f">Receiving Person</label><select name="recvP">${pOpts('')}</select></div></div>
+    ${me ? '' : '<p class="muted" style="font-size:12px">Sending Person fills in by itself when the active account is linked to a person (Admin Panel → Accounts).</p>'}
     <label class="f">Shipment Items</label><div class="checklist" id="shItems"></div>
     <label class="cb"><input type="checkbox" name="shReq" checked> Required for completing the project</label>
     <p class="muted" style="font-size:12px">Assets only change place when the shipment is marked as sent and received. A person-only shipment is recorded without moving anything.</p>`;
@@ -520,7 +551,12 @@ function projectProblems(pr){
     if (p.status === 'Leaver' && partAssetIds(x).length) out.push(`${p.name} is a Leaver and cannot receive assets.`);
     for (const aid of partAssetIds(x)) check(aid, x.personId, who);
   }
-  for (const r of repNew) check(r.newId, r.personId, (person(r.personId) || {}).name || 'deleted person');
+  for (const r of repNew) check(r.newId, r.personId, (person(r.personId) || {}).name || serviceName(r.serviceId) || 'deleted person');
+  for (const r of repNew.filter(x => x.serviceId)){
+    const n = asset(r.newId), o = asset(r.oldId);
+    if (!o) out.push('The old asset of a replacement no longer exists.');
+    else if (n && n.officeId !== o.officeId) out.push(`${n.tag} is at another office than ${o.tag}. Move it with a Shipment first.`);
+  }
   return out;
 }
 function completeProject(id){
@@ -532,9 +568,10 @@ function completeProject(id){
   }
   const byPerson = new Map();
   if (hasAct(pr, 'assignment')) for (const x of pr.participants) if (partAssetIds(x).length) byPerson.set(x.personId, {ids:partAssetIds(x), x});
-  if (hasAct(pr, 'replacement')) for (const r of pr.replacements) if (r.newId){ const e = byPerson.get(r.personId) || {ids:[], x:null}; e.ids.push(r.newId); byPerson.set(r.personId, e); }
+  const forService = hasAct(pr, 'replacement') ? pr.replacements.filter(r => r.newId && r.serviceId) : [];
+  if (hasAct(pr, 'replacement')) for (const r of pr.replacements) if (r.newId && r.personId){ const e = byPerson.get(r.personId) || {ids:[], x:null}; e.ids.push(r.newId); byPerson.set(r.personId, e); }
   const lines = projectTasks(pr).map(taskLine).join('\n');
-  if (!confirm(`${byPerson.size ? 'Are you sure you want to complete the project and finalize the asset checkouts?' : 'Are you sure you want to complete the project?'}\n\n${lines}`)) return;
+  if (!confirm(`${byPerson.size || forService.length ? 'Are you sure you want to complete the project and finalize the asset checkouts?' : 'Are you sure you want to complete the project?'}\n\n${lines}`)) return;
   let issued = 0;
   const docs = [];
   pr.issuedIds ||= [];
@@ -544,6 +581,13 @@ function completeProject(id){
     const acc = x ? CHECKLIST.filter(([k]) => x.checklist[k]).map(([, l]) => l) : [];
     docs.push(createDoc(pid, 'out', ids, {date:todayIso(), handler:db.settings.handler, projectId:pr.id,
       note:`Project: ${pr.name}${pr.ticket ? ' (' + pr.ticket + ')' : ''}` + (acc.length ? `\nHanded-over accessories (not inventory): ${acc.join(', ')}` : '')}));
+  }
+  // a Service replacement has no person and no document: the new asset takes the old one's place and Service link
+  for (const r of forService){
+    const n = asset(r.newId), o = asset(r.oldId);
+    pr.issuedIds.push(n.id); setHolder(n, o.holder, {projectId:pr.id, ticket:r.ticket, note:'Replacement for ' + o.tag});
+    if (n.serviceId !== r.serviceId) setAssetService(n, r.serviceId, {projectId:pr.id, ticket:r.ticket});
+    issued++;
   }
   pr.status = 'completed'; pr.result = 'successful'; pr.completedAt = Date.now();
   plog(pr.id, `Project completed successfully: ${pr.name} – ${issued} asset(s) checked out, ${docs.length} document(s)${docs.length ? ' (' + docs.map(d => d.no).join(', ') + ')' : ''}`);

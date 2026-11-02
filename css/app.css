@@ -145,12 +145,42 @@ button.primary,.btn.primary{background:var(--brand,var(--accent));border-color:v
 .tsplit{display:flex;gap:10px;font-size:12px}
 @media (max-width:560px){.tile.wide{grid-column:span 1}}
 .filters select{max-width:190px}
+.fchiprow{margin:-4px 0 12px;font-size:13px}
+.fchip{display:inline-flex;gap:4px;align-items:baseline;padding:2px 10px;border-radius:99px;border:1px solid var(--accent);background:var(--accent-soft);color:var(--text);font-size:12px}
+.fchip.hid{border-color:var(--warn);background:rgba(199,119,0,.12)}
+.fchip:hover{text-decoration:none;border-color:var(--danger)}
+/* the asset table gives way to its columns: identifiers stay whole, longer text wraps */
+.atable th,.atable td{padding:6px 8px;font-size:13px}
+.atable th{white-space:normal}
+.atable .pill{white-space:normal}
+.atable td.serial{font-family:ui-monospace,Consolas,monospace;font-size:12px;overflow-wrap:anywhere;min-width:96px}
+.clip{max-width:280px;min-width:80px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+/* customize dialogs and the guided assignment */
+dialog.wide{width:min(860px,calc(100vw - 32px))}
+dialog h4{margin:14px 0 6px;font-size:13px}
+.cfg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:0 12px}
+.cfg-grid label.cb{margin:5px 0}
+.cvcol{display:flex;gap:6px;align-items:center;padding:3px 0;border-bottom:1px solid var(--line)}
+.cvcol:last-child{border-bottom:0}
+.cvcol label.cb{margin:0}
+.wiz-steps{display:flex;gap:4px;flex-wrap:wrap;list-style:none;padding:0;margin:0 0 12px;font-size:12px;color:var(--muted)}
+.wiz-steps li{padding:2px 8px;border-radius:99px;border:1px solid var(--line)}
+.wiz-steps li.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.wiz-steps li.done{color:var(--ok)}
+.segs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px}
+.scanvid{width:100%;max-height:50vh;background:#000;border-radius:8px}
+/* searchable dropdown */
+.combo-pop{position:fixed;z-index:3000;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.25);padding:6px;display:flex;flex-direction:column;gap:4px;max-height:min(340px,calc(100vh - 16px));margin:0}
+.combo-pop input{width:100%}
+.combo-list{overflow:auto;min-height:0}
+.combo-opt{padding:5px 8px;border-radius:5px;cursor:pointer;overflow-wrap:anywhere}
+.combo-opt.on{font-weight:600}
+.combo-opt.act,.combo-opt:hover{background:var(--accent-soft)}
+.combo-opt.off{opacity:.5;cursor:not-allowed}
+.combo-grp{padding:6px 8px 2px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
 /* searchable picker */
 .picker{display:flex;flex-direction:column;gap:4px}
 .picker select{width:100%}
-.pick-row{display:flex;gap:4px;flex-wrap:wrap}
-.pick-row select{flex:1;width:auto;min-width:0;padding:4px 6px;font-size:12px}
-.bulkbar .pick-f{width:auto;max-width:120px;padding:4px 6px;font-size:12px}
 .dline{display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:3px}
 .dline select,td select[data-dadd]{padding:3px 6px;font-size:12px;max-width:190px}
 /* toast */
