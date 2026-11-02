@@ -22,6 +22,7 @@ const TOUR = [
   {title:'Drag & drop', text:'An office asset goes from the pool onto desk A3. This is a placement, not a checkout. WFH assets are refused.',
     act:() => { const a = officePool(tRoom('2.12').id).find(x => x.type === 'monitor'); if (a) dropOnDesk(a, tObj('2.12', 'A3')); fpSave(); }, hl:() => document.querySelector(`.obj[data-id="${tObj('2.12', 'A3').id}"]`), ms:6500},
   {title:'Multiple offices', text:'Every office has its own rooms and floorplans. Switch between Debrecen and Budapest here; each keeps its own layout and assets.', go:() => '#/rooms?office=' + db.offices[1].id, hl:'.officebar', ms:6500},
+  {title:'Country and office', text:'The selector in the header sets the location for every module. Hungary and Poland stay separate; All Offices means one country only.', go:() => { Object.assign(scope, {officeId:''}); return '#/assets'; }, hl:'#scopeBar', ms:6500},
   {title:'Shipment-only project', text:'A project includes only the activities you select. This one is a single shipment: it is complete once the receiving office confirms the receipt.', go:() => '#/project/' + db.projects[2].id, hl:'#prTasks', ms:7000},
   {title:'Projects without names', text:'Five new joiners are planned, names unknown yet. Planned quantities, selected assets and issued assets are counted separately.',
     go:() => '#/project/' + db.projects[1].id, hl:'.tbl-wrap', ms:7500},

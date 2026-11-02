@@ -393,7 +393,7 @@ function setUser(){
   const cur = currentAccount();
   return `<div class="card" style="max-width:520px"><b>Which account is using this browser?</b>
     <p class="muted">The prototype has no passwords. The chosen account decides what is available here, and its name goes into the “By” column of the log (stored in this browser only).</p>
-    <label class="f">Account</label><select id="uAcc">${db.accounts.filter(a => a.enabled).map(a => `<option value="${a.id}"${a.id === cur.id ? ' selected' : ''}>${esc(a.displayName)} (${a.role})</option>`).join('')}</select>
+    <label class="f">Account</label><select id="uAcc">${db.accounts.filter(a => a.enabled).map(a => `<option value="${a.id}"${a.id === cur.id ? ' selected' : ''}>${esc(a.displayName)} (${esc(roleLabel(a.role))})</option>`).join('')}</select>
     <div class="row" style="margin-top:12px"><button class="primary" onclick="saveUser()">Switch</button></div></div>`;
 }
 function saveUser(){ try { localStorage.setItem(ACCOUNT_KEY, $('#uAcc').value); } catch(e) {} toast('Switched to ' + currentUser()); applyAccountUi(); render(); }

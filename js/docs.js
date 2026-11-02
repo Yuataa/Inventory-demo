@@ -203,10 +203,10 @@ async function deleteDoc(id){
 }
 function viewDocs(params){
   const f = params.get('f') || '';
-  let docs = db.docs;
+  let docs = scopedDocs();
   if (f === 'wait') docs = docs.filter(d => !d.fileId);
   if (f === 'signed') docs = docs.filter(d => d.fileId);
-  const missing = db.people.filter(p => uncovered(p.id).length);
+  const missing = scopedPeople().filter(p => uncovered(p.id).length);
   const opt = (v, l) => `<option value="${v}"${f === v ? ' selected' : ''}>${l}</option>`;
   return `
     <h1>Documents</h1>

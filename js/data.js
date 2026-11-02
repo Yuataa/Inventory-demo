@@ -21,14 +21,15 @@ const SHIP_STATUS = ['Preparing', 'Sent', 'Received'];
 const ACTIVITIES = {shipment:'Shipment', preparation:'Equipment Preparation', assignment:'Asset Assignment', replacement:'Replacement'};
 const ACCOUNT_KEY = 'itraktar_account';
 const OFFICE_KEY = 'itraktar_office';
-const ROLES = ['Superadmin', 'Admin', 'Visitor'];
+const SCOPE_KEY = 'itraktar_scope';
+const BUILTIN_ROLES = ['Superadmin', 'Admin', 'Viewer'];
 // every main module with its real actions; menu and view exist for each module that has a menu item
 const MODULES = [
   {id:'overview',  name:'Overview',       ops:{}},
   {id:'assets',    name:'Assets',         ops:{create:'Create', edit:'Edit', delete:'Delete', import:'Import', export:'Export', assign:'Assign', move:'Move / Return'}},
   {id:'people',    name:'People',         ops:{create:'Create', edit:'Edit', delete:'Delete', import:'Import', status:'Manage User Status & tickets'}},
   {id:'floorplan', name:'Floorplan',      ops:{office:'Manage offices', createRoom:'Create room', edit:'Edit floorplan', details:'Edit room details', delete:'Delete room'}},
-  {id:'projects',  name:'Projects',       ops:{create:'Create', edit:'Edit', delete:'Delete', complete:'Complete', ship:'Manage shipments'}},
+  {id:'projects',  name:'Projects',       ops:{create:'Create', edit:'Edit', delete:'Delete', complete:'Complete', shipCreate:'Shipment Create', shipSend:'Shipment Send', shipReceive:'Shipment Receive'}},
   {id:'documents', name:'Documents',      ops:{create:'Create', upload:'Upload signed copy', delete:'Delete', templates:'Edit templates'}},
   {id:'labels',    name:'Label Printing', noMenu:true, ops:{print:'Print', presets:'Manage presets'}},
   {id:'logs',      name:'Logs',           ops:{}},
@@ -40,7 +41,7 @@ function defaultPerms(role){
   const out = {};
   for (const m of MODULES) for (const k of permKeys(m)){
     const basic = k.endsWith('.menu') || k.endsWith('.view');
-    out[k] = m.id === 'admin' ? false : role === 'Admin' ? true : basic && m.id !== 'settings';
+    out[k] = m.id === 'admin' ? false : role === 'Admin' ? true : role === 'Viewer' ? basic && m.id !== 'settings' : false;
   }
   return out;
 }
@@ -50,6 +51,7 @@ const ESIGN_PROVIDERS = {signnow:'SignNow', acrobat:'Adobe Acrobat Sign'};
 const STATUS = {
   ok:      {label:'Working',   cls:'ok'},
   faulty:  {label:'Faulty',    cls:'bad'},
+  missing: {label:'Missing',   cls:'bad'},
   repair:  {label:'In Repair', cls:'warn'},
   lost:    {label:'Lost',      cls:'bad'},
   retired: {label:'Retired',   cls:'bad'},
@@ -86,7 +88,7 @@ const OLD_TYPE_NAMES = {'Számítógép':'Computer', 'Fejhallgató':'Headset', '
   'Router / tűzfal':'Router / firewall', 'Szerver':'Server', 'Szünetmentes (UPS)':'UPS', 'Egyéb':'Other'};
 // dashboard items: the tiles first, then the larger sections
 const DASH_ITEMS = {
-  total:'Total Assets', office:'Office / Onsite Assets', assigned:'Assigned Assets', storage:'Storage / Spare Assets', health:'Faulty / Aged Assets',
+  total:'Total Active Assets', office:'Office / Onsite Assets', assigned:'Assigned Assets', storage:'Storage / Spare Assets', lost:'Lost Assets', missing:'Missing Assets', faulty:'Faulty Assets', health:'Faulty / Aged Assets',
   returns:'Assets Awaiting Return', transit:'Assets In Transit', projects:'Active Projects', unsigned:'Documents to Sign', nodoc:'Assets Without Document',
   warranty:'Warranty Expiring', models:'Top Models', services:'Services', remote:'WFH / Hybrid People', recent:'Recent Events',
 };
@@ -157,7 +159,7 @@ function save(){ gcImages(); persist(db); }
 
 // v1 (single html) and v2 data are both brought to the current shape
 function migrate(d){
-  for (const k of ['people', 'rooms', 'desks', 'assets', 'log', 'items', 'docs', 'swaps', 'services', 'roles', 'models', 'fieldSets', 'projects', 'returns', 'offices', 'accounts']) d[k] ||= [];
+  for (const k of ['people', 'rooms', 'desks', 'assets', 'log', 'items', 'docs', 'swaps', 'services', 'roles', 'models', 'fieldSets', 'projects', 'returns', 'offices', 'accounts', 'countries', 'accessRoles']) d[k] ||= [];
   d.images ||= {}; d.seq ||= {asset:0};
   d.settings = {...DEFAULT_SETTINGS, ...(d.settings || {})};
   d.settings.agedYears ||= 5;
@@ -169,8 +171,26 @@ function migrate(d){
   // accounts are separate from people; a first Superadmin always exists so nobody is locked out
   if (!d.accounts.length){ let u = ''; try { u = localStorage.getItem(USER_KEY) || ''; } catch(e) {} d.accounts.push({id:uid(), username:'superadmin', displayName:u || 'Superadmin', role:'Superadmin', enabled:true, personId:null}); }
   d.permissions ||= {};
-  for (const r of ['Admin', 'Visitor']) d.permissions[r] = {...defaultPerms(r), ...(d.permissions[r] || {})};
+  if (d.permissions.Visitor){ d.permissions.Viewer = d.permissions.Visitor; delete d.permissions.Visitor; }
+  for (const id of BUILTIN_ROLES) if (!d.accessRoles.some(r => r.id === id)) d.accessRoles.push({id, name:id, builtin:true});
+  for (const r of d.accessRoles){
+    if (r.id === 'Superadmin') continue;
+    const saved = d.permissions[r.id] || {};
+    if ('projects.ship' in saved){ for (const k of ['shipCreate', 'shipSend', 'shipReceive']) saved['projects.' + k] = saved['projects.ship']; delete saved['projects.ship']; }
+    d.permissions[r.id] = {...defaultPerms(r.id), ...saved};
+  }
+  delete d.permissions.Superadmin;
   if (!d.offices.length) d.offices.push({id:uid(), name:'Main Office', code:'MAIN'});
+  // default structure: existing offices go under Hungary, Poland starts with its own empty office
+  if (!d.countries.length){
+    d.countries.push({id:uid(), name:'Hungary', code:'HU'}, {id:uid(), name:'Poland', code:'PL'});
+    d.offices.push({id:uid(), name:'Poland Office', code:'PLO', countryId:d.countries[1].id});
+  }
+  for (const o of d.offices) if (!d.countries.some(c => c.id === o.countryId)) o.countryId = d.countries[0].id;
+  for (const a of d.accounts){
+    if (a.role === 'Visitor') a.role = 'Viewer';
+    if (!a.locations){ a.locations = {}; if (a.role !== 'Superadmin') a.locations['c:' + d.countries[0].id] = 'role'; }
+  }
   d.settings.label = {...LABEL_DEFAULT, ...(d.settings.label || {})};
   const dash = defaultDashboard(), saved = d.settings.dashboard || {};
   d.settings.dashboard = {items:[...(saved.items || []).filter(i => DASH_ITEMS[i.id]), ...dash.items.filter(i => !(saved.items || []).some(x => x.id === i.id))],
@@ -188,9 +208,19 @@ function migrate(d){
   for (const r of d.rooms){ r.kind ||= 'office'; r.serviceIds ||= []; if (!d.offices.some(o => o.id === r.officeId)) r.officeId = d.offices[0].id; }
   for (const k of d.desks){ k.kind ||= 'desk'; if (k.shared === undefined) k.shared = false; if (k.port === undefined) k.port = ''; }
   for (const a of d.assets){ a.custom ||= {}; if (a.placement === undefined) a.placement = null; if (a.serviceId === undefined) a.serviceId = null; if (a.name === undefined) a.name = ''; }
-  for (const p of d.people){ if (!d.modes.some(m => m.id === p.mode)) p.mode = d.modes[0].id; p.status ||= 'Active'; p.tickets ||= []; p.isd = !!p.isd; if (p.suspension === undefined) p.suspension = null; if (p.endDate === undefined) p.endDate = ''; }
+  for (const p of d.people){ if (!d.modes.some(m => m.id === p.mode)) p.mode = d.modes[0].id; p.status ||= 'Active'; p.tickets ||= []; p.isd = !!p.isd;
+    if (!d.offices.some(o => o.id === p.officeId)){ const k = d.desks.find(x => x.personId === p.id), r = k && d.rooms.find(x => x.id === k.roomId); p.officeId = r ? r.officeId : d.offices[0].id; }
+    if (p.suspension === undefined) p.suspension = null; if (p.endDate === undefined) p.endDate = ''; }
+  // every asset has exactly one office: stock and assigned assets keep it here, room assets take it from their room
+  for (const a of d.assets){
+    const h = a.holder, rid = h.kind === 'office' ? h.id : h.kind === 'desk' ? (d.desks.find(k => k.id === h.id) || {}).roomId : null, r = rid && d.rooms.find(x => x.id === rid);
+    if (r) a.officeId = r.officeId;
+    else if (h.kind === 'site') a.officeId = h.id;
+    else if (!d.offices.some(o => o.id === a.officeId)) a.officeId = h.kind === 'person' ? (d.people.find(p => p.id === h.id) || {}).officeId || d.offices[0].id : d.offices[0].id;
+  }
   for (const s of d.fieldSets){ s.typeIds ||= []; s.fields ||= []; }
   for (const pr of d.projects){
+    if (!d.offices.some(o => o.id === pr.officeId)) pr.officeId = d.offices[0].id;
     pr.participants ||= []; pr.demand ||= []; pr.shipments ||= []; pr.replacements ||= [];
     pr.targetServiceId ||= null; pr.targetRoomId ||= null; pr.accessories ||= '';
     // older projects get the activities their data already uses, so no section disappears
@@ -261,7 +291,7 @@ function nextAssetId(){
 
 // ---------- demo data ----------
 function demo(){
-  const d = {version:2, seq:{asset:0}, offices:[], accounts:[], services:[], roles:[], people:[], rooms:[], desks:[], items:[], types:DEFAULT_TYPES.map(t => ({...t})), modes:DEFAULT_MODES.map(m => ({...m})), returns:[],
+  const d = {version:2, seq:{asset:0}, offices:[], accounts:[], countries:[], services:[], roles:[], people:[], rooms:[], desks:[], items:[], types:DEFAULT_TYPES.map(t => ({...t})), modes:DEFAULT_MODES.map(m => ({...m})), returns:[],
     models:[], fieldSets:[], assets:[], docs:[], swaps:[], projects:[], log:[], images:{},
     settings:{...DEFAULT_SETTINGS, company:'Example Ltd.', address:'1 Main Street, Example City', handler:'IT Support'}};
   const now = Date.now(), day = 864e5, iso = t => new Date(t).toISOString().slice(0, 10);
@@ -294,20 +324,28 @@ function demo(){
   I(r2, 'door', 'Entrance', 0, 340, {w:12, h:70});
   const rk1 = D(srv, 'rack', 'Rack 1', 60, 80), rk2 = D(srv, 'rack', 'Rack 2', 180, 80);
   I(srv, 'door', 'Entrance (access control)', 400, 328);
-  const deb = {id:uid(), name:'Debrecen Office', code:'DEB'}, bud = {id:uid(), name:'Budapest Office', code:'BUD'};
-  d.offices.push(deb, bud);
+  const hu = {id:uid(), name:'Hungary', code:'HU'}, pl = {id:uid(), name:'Poland', code:'PL'};
+  d.countries.push(hu, pl);
+  const deb = {id:uid(), name:'Debrecen Office', code:'DEB', countryId:hu.id}, bud = {id:uid(), name:'Budapest Office', code:'BUD', countryId:hu.id}, pol = {id:uid(), name:'Poland Office', code:'PLO', countryId:pl.id};
+  d.offices.push(deb, bud, pol);
   for (const r of d.rooms) r.officeId = deb.id;
+  for (const p of d.people) p.officeId = deb.id;
+  const pm = R('Main Office', '1st floor', 'office', 700, 400, [fin]); pm.officeId = pol.id;
+  D(pm, 'desk', 'P1', 40, 60, {port:'P1-1-01'}); D(pm, 'desk', 'P2', 240, 60, {port:'P1-1-02'}); I(pm, 'door', 'Entrance', 0, 300, {w:12, h:70});
+  const nowak = P('Nowak Anna', 'nowak.anna@example.com', fin, agent, 'Onsite'); nowak.officeId = pol.id;
   const bm = R('Meeting Room', '3rd floor', 'meeting', 600, 360, []), bi = R('IT Room', '3rd floor', 'server', 520, 340, [its]), bo = R('Office 1', '3rd floor', 'office', 760, 440, [fin]);
   for (const r of [bm, bi, bo]) r.officeId = bud.id;
   D(bo, 'desk', 'D1', 40, 60, {port:'B3-1-01'}); D(bo, 'desk', 'D2', 240, 60, {port:'B3-1-02'}); D(bi, 'rack', 'Rack B1', 60, 80); I(bo, 'door', 'Entrance', 0, 340, {w:12, h:70});
   d.accounts.push({id:uid(), username:'superadmin', displayName:'Superadmin', role:'Superadmin', enabled:true, personId:null},
-    {id:uid(), username:'it.admin', displayName:'IT Admin', role:'Admin', enabled:true, personId:null}, {id:uid(), username:'visitor', displayName:'Visitor', role:'Visitor', enabled:true, personId:null});
+    {id:uid(), username:'it.admin', displayName:'IT Admin', role:'Admin', enabled:true, personId:null, locations:{['c:' + hu.id]:'role'}},
+    {id:uid(), username:'viewer', displayName:'Viewer', role:'Viewer', enabled:true, personId:null, locations:{['c:' + hu.id]:'role'}},
+    {id:uid(), username:'poland.admin', displayName:'Poland Admin', role:'Admin', enabled:true, personId:null, locations:{['c:' + pl.id]:'role'}});
   const models = new Map();
   const M = (typeId, name) => { const k = typeId + '|' + name; if (!models.has(k)){ const m = {id:uid(), typeId, name, imageId:null}; d.models.push(m); models.set(k, m); } return models.get(k).id; };
   let n = 0;
   const A = (type, model, serial, holder, extra = {}) => {
     const arrivedT = now - (60 + Math.floor(Math.random() * 900)) * day;
-    const a = {id:uid(), tag:fmtAssetId(++n), name:type === 'pc' ? 'TC-PC-' + String(n).padStart(3, '0') : '', type, modelId:M(type, model), serial, status:'ok', holder, placement:null, serviceId:null, custom:{}, note:'',
+    const a = {id:uid(), officeId:deb.id, tag:fmtAssetId(++n), name:type === 'pc' ? 'TC-PC-' + String(n).padStart(3, '0') : '', type, modelId:M(type, model), serial, status:'ok', holder, placement:null, serviceId:null, custom:{}, note:'',
       arrived:iso(arrivedT), warrantyUntil:iso(arrivedT + 3 * 365 * day), supplier:'Demo Ltd.', orderNo:'', created:now,
       assignedAt:holder.kind === 'storage' ? null : arrivedT + 7 * day, ...extra};
     d.assets.push(a);
@@ -350,6 +388,11 @@ function demo(){
   A('router', 'Fortinet FortiGate 60F', 'FGT60F-001', desk(rk1)); A('switch', 'Cisco CBS350-24P', 'CBS24-7781', desk(rk1));
   A('switch', 'Cisco CBS350-48P', 'CBS48-1102', desk(rk1));
   A('server', 'Dell PowerEdge R650', 'R650-XK12', desk(rk2)); A('ups', 'APC Smart-UPS 1500', 'APC-AS1500', desk(rk2));
+  // Budapest and Poland keep their own stock
+  A('pc', 'Lenovo ThinkPad T14', 'PF3BUD01', store, {officeId:bud.id, custom:tp}); A('monitor', 'Dell P2422H', 'CN0BUD02', store, {officeId:bud.id, custom:dell});
+  A('headset', 'Jabra Evolve2 40', 'JB40-BUD3', office(bo));
+  A('pc', 'Dell Latitude 5440', 'DLPL-0001', store, {officeId:pol.id}); A('monitor', 'Samsung S24C', 'SSPL-0002', office(pm), {custom:sams}); A('pc', 'Dell Latitude 5440', 'DLPL-0003', per(nowak), {officeId:pol.id});
+  A('headset', 'Jabra Evolve2 40', 'JBPL-0004', store, {officeId:pol.id, status:'lost'}); A('dock', 'Lenovo USB-C Dock Gen2', 'DKPL-0005', store, {officeId:pol.id, status:'missing'});
   d.seq.asset = n;
   // a running preparation project for two new Customer Support colleagues
   const pick = iso(now + 7 * day);
@@ -408,8 +451,10 @@ const modeIcon = id => modeOf(id).icon;
 const modeBehavior = id => modeOf(id).behavior;
 const assetPerson = a => a.holder.kind === 'person' ? person(a.holder.id) : null;
 const assetServiceIs = (a, id) => a.serviceId === id || (assetPerson(a) || {}).serviceId === id;
-const isOut = a => a.status === 'lost' || a.status === 'retired';
+const isOut = a => a.status === 'lost' || a.status === 'missing' || a.status === 'retired';
 const isFaulty = a => a.status === 'faulty' || a.status === 'repair';
+// the normal, usable stock: everything Lost, Missing, Faulty or Retired is counted apart
+const isActiveAsset = a => !isOut(a) && !isFaulty(a);
 const ageYears = a => a.arrived ? (Date.now() - new Date(a.arrived).getTime()) / (365.25 * 864e5) : null;
 const isAged = a => { const y = ageYears(a); return y !== null && y >= db.settings.agedYears; };
 // the dashboard groups; each comes from the asset's real state, never from a separate list
@@ -425,6 +470,10 @@ const serviceName = id => (service(id) || {}).name || '';
 const roleName = id => (role(id) || {}).name || '';
 const roomObjs = rid => [...db.desks.filter(k => k.roomId === rid), ...db.items.filter(i => i.roomId === rid)];
 const office = id => byId(db.offices, id);
+const country = id => byId(db.countries, id);
+const roleLabel = id => (byId(db.accessRoles, id) || {}).name || id;
+const officeLabel = id => (office(id) || {}).name || '–';
+const officeCountry = id => country((office(id) || {}).countryId) || {};
 const account = id => byId(db.accounts, id);
 const officeRooms = oid => db.rooms.filter(r => r.officeId === oid);
 function currentAccount(){
@@ -488,12 +537,16 @@ function holderPerson(h){
 }
 const assetRoomId = a => a.holder.kind === 'office' ? a.holder.id : a.holder.kind === 'desk' ? (desk(a.holder.id) || {}).roomId
   : a.placement ? (desk(a.placement.deskId) || {}).roomId : null;
-const assetOfficeId = a => a.holder.kind === 'site' ? a.holder.id : (room(assetRoomId(a)) || {}).officeId || null;
+// the office the holder itself belongs to; storage and people do not decide it
+const holderOffice = h => h.kind === 'site' ? h.id : h.kind === 'office' ? (room(h.id) || {}).officeId : h.kind === 'desk' ? (room((desk(h.id) || {}).roomId) || {}).officeId : null;
+// null while in transit: the asset is then at neither office. a.officeId still says where it left from.
+const assetOfficeId = a => a.holder.kind === 'transit' ? null : holderOffice(a.holder) || a.officeId || null;
 const sitePool = oid => db.assets.filter(a => a.holder.kind === 'site' && a.holder.id === oid);
 
 // every holder change goes through here so the log category is always right
 function setHolder(a, h, extra = {}){
   const before = holderText(a.holder), wasPerson = a.holder.kind === 'person' ? a.holder.id : null;
+  if (holderOffice(h)) a.officeId = holderOffice(h);
   const nowPerson = h.kind === 'person' ? h.id : null;
   a.holder = h;
   if (nowPerson !== wasPerson || !nowPerson) a.placement = null;
@@ -589,7 +642,7 @@ function modePool(rid, mode){
   return db.assets.filter(a => {
     if (a.holder.kind !== 'person') return false;
     const p = person(a.holder.id);
-    return p && modeBehavior(p.mode) === mode && (r.serviceIds.includes(p.serviceId) || r.serviceIds.includes(a.serviceId));
+    return p && a.officeId === r.officeId && modeBehavior(p.mode) === mode && (r.serviceIds.includes(p.serviceId) || r.serviceIds.includes(a.serviceId));
   });
 }
 

@@ -69,7 +69,7 @@ function askConfirm(title, html, ok = 'Confirm'){
 // ---------- searchable picker: a filter box above a list, with optional Service / Work Mode / Office filters ----------
 const holderFilters = () => `<select class="pick-f" data-k="svc" title="Service"><option value="">All Services</option>${sortHu(db.services, s => s.name).map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
   <select class="pick-f" data-k="mode" title="Work Mode"><option value="">All Work Modes</option>${db.modes.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select>
-  <select class="pick-f" data-k="office" title="Office"><option value="">All Offices</option>${sortHu(db.offices, o => o.name).map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select>`;
+  <select class="pick-f" data-k="office" title="Office"><option value="">All Offices</option>${sortHu(db.offices.filter(o => scopeOfficeIds().includes(o.id)), o => o.name).map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select>`;
 const picker = (name, optionsHtml, o = {}) => `<div class="picker">${o.filters ? `<div class="pick-row">${holderFilters()}</div>` : ''}<input type="search" class="pick-q" placeholder="Search the list…">
   <select class="pick-list" name="${name}"${o.id ? ` id="${o.id}"` : ''} size="${o.size || 7}"${o.required ? ' required' : ''}>${optionsHtml}</select></div>`;
 function applyPicker(wrap){
@@ -83,13 +83,15 @@ function applyPicker(wrap){
 document.addEventListener('input', e => { if (e.target.classList.contains('pick-q')) applyPicker(e.target.closest('.picker')); });
 document.addEventListener('change', e => { if (e.target.classList.contains('pick-f')) applyPicker(e.target.closest('.picker')); });
 // every place an asset can go: storage, people, office pools, desks
+// only the people and places of one country: moving further away is a shipment
 function holderOptions(current, o = {}){
+  const ids = o.officeId ? [o.officeId] : scopeOfficeIds(), cid = o.officeId ? (office(o.officeId) || {}).countryId : scope.countryId;
   const sel = v => v === current ? ' selected' : '';
   let h = o.noStorage ? '' : `<option value="storage"${sel('storage')}>📦 In Stock</option>`;
-  h += '<optgroup label="Assign to a person">' + sortHu(db.people, p => p.name).map(p =>
+  h += '<optgroup label="Assign to a person">' + sortHu(db.people.filter(p => (office(p.officeId) || {}).countryId === cid), p => p.name).map(p =>
     `<option value="person:${p.id}" data-svc="${p.serviceId || ''}" data-mode="${esc(p.mode)}"${sel('person:' + p.id)}>👤 ${esc(p.name)} – ${esc(serviceName(p.serviceId) || 'no Service')} · ${esc(modeName(p.mode))}${p.status !== 'Active' ? ' · ' + p.status : ''}</option>`).join('') + '</optgroup>';
-  const offices = sortHu(db.rooms, r => roomPath(r));
-  h += '<optgroup label="Office, not placed yet">' + sortHu(db.offices, o => o.name).map(o => `<option value="site:${o.id}" data-office="${o.id}"${sel('site:' + o.id)}>🏢 ${esc(o.name)}</option>`).join('') + '</optgroup>';
+  const offices = sortHu(db.rooms.filter(r => ids.includes(r.officeId)), r => roomPath(r));
+  h += '<optgroup label="Office, not placed yet">' + sortHu(db.offices.filter(x => ids.includes(x.id)), x => x.name).map(o => `<option value="site:${o.id}" data-office="${o.id}"${sel('site:' + o.id)}>🏢 ${esc(o.name)}</option>`).join('') + '</optgroup>';
   if (offices.length) h += '<optgroup label="Room pool (not on a desk)">' + offices.map(r =>
     `<option value="office:${r.id}" data-office="${r.officeId}"${sel('office:' + r.id)}>🏢 ${esc(roomPath(r))}</option>`).join('') + '</optgroup>';
   for (const r of offices){
@@ -187,7 +189,7 @@ document.addEventListener('change', e => {
 // ---------- asset table ----------
 function assetRows(list, opts = {}){
   if (!list.length) return `<div class="empty">No assets.</div>`;
-  return `<div class="tbl-wrap"><table><thead><tr>${opts.select ? '<th class="sel"><input type="checkbox" id="selAll" title="Select all"></th>' : ''}<th></th><th>Asset ID</th><th>Asset Name</th><th>Type</th><th>Model</th><th>Serial Number</th><th>Status</th><th>Warranty</th>${opts.noLoc ? '' : '<th>Location</th>'}${opts.actions ? '<th></th>' : ''}</tr></thead><tbody>` +
+  return `<div class="tbl-wrap"><table><thead><tr>${opts.select ? '<th class="sel"><input type="checkbox" id="selAll" title="Select all"></th>' : ''}<th></th><th>Asset ID</th><th>Asset Name</th><th>Type</th><th>Model</th><th>Serial Number</th><th>Status</th><th>Warranty</th>${opts.noLoc ? '' : '<th>Location</th><th>Country</th><th>City / Office</th>'}${opts.actions ? '<th></th>' : ''}</tr></thead><tbody>` +
     list.map(a => {
       const res = reservedBy(a.id), ret = openReturnOf(a.id);
       return `<tr${selected.has(a.id) ? ' class="picked"' : ''}>
@@ -200,7 +202,7 @@ function assetRows(list, opts = {}){
       <td class="muted" style="white-space:nowrap" data-v="${esc(a.serial)}">${esc(a.serial)}${a.serial ? copyBtn(a.serial) : ''}</td>
       <td>${statusPill(a.status)}${isAged(a) ? ' <span class="pill warn">Aged</span>' : ''}</td>
       <td data-v="${esc(a.warrantyUntil || '')}">${warrantyPill(a)}</td>
-      ${opts.noLoc ? '' : `<td>${whereLink(a)}</td>`}
+      ${opts.noLoc ? '' : `<td>${whereLink(a)}</td><td>${esc(officeCountry(a.officeId).name || '–')}</td><td>${esc(officeLabel(a.officeId))}</td>`}
       ${opts.actions ? `<td style="text-align:right;white-space:nowrap">${opts.actions(a)}</td>` : ''}
     </tr>`;
     }).join('') + '</tbody></table></div>';
@@ -222,9 +224,10 @@ function logTable(entries, o = {}){
 const logMatches = (l, cat) => !cat ? true : cat === 'project' ? l.cat === 'project' || !!l.projectId : l.cat === cat;
 function viewLogs(params){
   const cat = params.get('cat') || '', q = params.get('q') || '';
-  let list = db.log.filter(l => logMatches(l, cat));
+  const base = scopedLog();
+  let list = base.filter(l => logMatches(l, cat));
   if (q){ const n = norm(q); list = list.filter(l => norm([l.text, l.by, (asset(l.assetId) || {}).tag, (project(l.projectId) || {}).name, (person(l.personId) || {}).name].join(' ')).includes(n)); }
-  const chip = (c, label) => { const n = db.log.filter(l => logMatches(l, c)).length;
+  const chip = (c, label) => { const n = base.filter(l => logMatches(l, c)).length;
     return `<a href="#/log${c ? '?cat=' + c : ''}" class="${c === cat ? 'on' : ''}">${label} <small>${n}</small></a>`; };
   return `<h1>Logs</h1><div class="sub">Moves, checkouts, returns, changes, status updates and project events.</div>
     <div class="fchips">${chip('', 'All')}${Object.entries(LOG_CATS).map(([k, v]) => chip(k, v)).join('')}</div>
@@ -244,24 +247,25 @@ function bindLogs(params){
 function search(q){
   const n = norm(q.trim()); if (!n) return [];
   const out = [];
-  for (const p of db.people) if (norm([p.name, p.email, serviceName(p.serviceId), roleName(p.roleId), modeName(p.mode), p.status, ...p.tickets.map(t => t.no)].join(' ')).includes(n)){
+  for (const p of scopedPeople()) if (norm([p.name, p.email, serviceName(p.serviceId), roleName(p.roleId), modeName(p.mode), p.status, ...p.tickets.map(t => t.no)].join(' ')).includes(n)){
     const pa = personAssets(p.id);
     out.push({grp:'People', href:'#/person/' + p.id, title:'👤 ' + p.name, sub:`${serviceName(p.serviceId) || 'no Service'} · ${modeName(p.mode)} · ${p.status} · ${pa.direct.length + pa.onDesk.length} assets`});
   }
-  for (const a of db.assets){
+  for (const a of scopedAssets(true)){
     const custom = Object.values(a.custom || {}).join(' ');
     if (norm([a.tag, a.legacyTag, a.name, a.serial, modelName(a), typeLabel(a.type), a.note, custom].join(' ')).includes(n))
       out.push({grp:'Assets', href:'#/asset/' + a.id, title:`${typeIcon(a.type)} ${a.tag} · ${assetName(a)}`, sub:whereText(a) + (a.serial ? ' · S/N ' + a.serial : '')});
   }
-  for (const k of db.desks){ const r = room(k.roomId); if (norm([k.label, k.port, r ? r.name : '', k.sharedNote].join(' ')).includes(n))
+  const ids = scopeOfficeIds();
+  for (const k of db.desks.filter(x => ids.includes((room(x.roomId) || {}).officeId))){ const r = room(k.roomId); if (norm([k.label, k.port, r ? r.name : '', k.sharedNote].join(' ')).includes(n))
     out.push({grp:'Desks', href:`#/room/${k.roomId}/${k.id}`, title:`${furnIcon(k)} ${k.label}${k.port ? ' · port ' + k.port : ''}`, sub:(r ? r.name : '') + (deskOwnerText(k) ? ' – ' + deskOwnerText(k) : '')}); }
-  for (const o of db.offices) if (norm(o.name + ' ' + (o.code || '')).includes(n))
+  for (const o of db.offices.filter(x => ids.includes(x.id))) if (norm(o.name + ' ' + (o.code || '')).includes(n))
     out.push({grp:'Offices', href:'#/rooms?office=' + o.id, title:'🏢 ' + o.name, sub:`${officeRooms(o.id).length} rooms`});
-  for (const pr of db.projects) if (norm([pr.name, pr.ticket, pr.owner].join(' ')).includes(n))
+  for (const pr of scopedProjects()) if (norm([pr.name, pr.ticket, pr.owner].join(' ')).includes(n))
     out.push({grp:'Projects', href:'#/project/' + pr.id, title:'📋 ' + pr.name, sub:`${PROJECT_STATUS[pr.status]} · ${pr.ticket || 'no ticket'} · ${pr.participants.length} participants`});
   for (const s of db.services) if (norm(s.name).includes(n))
     out.push({grp:'Service', href:'#/people?service=' + s.id, title:'🧩 ' + s.name, sub:`${db.people.filter(p => p.serviceId === s.id).length} people`});
-  for (const r of db.rooms) if (norm(r.name + ' ' + r.floor).includes(n))
+  for (const r of db.rooms.filter(x => ids.includes(x.officeId))) if (norm(r.name + ' ' + r.floor).includes(n))
     out.push({grp:'Floorplan', href:'#/room/' + r.id, title:(ROOM_KINDS[r.kind] || '🏢').split(' ')[0] + ' ' + r.name, sub:roomPath(r) + ' · ' + r.floor});
   const allowed = {People:'people', Assets:'assets', Desks:'floorplan', Offices:'floorplan', Floorplan:'floorplan', Projects:'projects', Service:'people'};
   return out.filter(r => can(allowed[r.grp] + '.view')).slice(0, 40);

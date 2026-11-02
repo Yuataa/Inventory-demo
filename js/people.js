@@ -3,7 +3,8 @@
 
 function viewPeople(params){
   const q = params.get('q') || '', svc = params.get('service') || '', mode = params.get('mode') || '', st = params.get('status') || '';
-  let list = db.people;
+  const scoped = scopedPeople();
+  let list = scoped;
   if (svc) list = list.filter(p => svc === '__none' ? !p.serviceId : p.serviceId === svc);
   if (mode) list = list.filter(p => p.mode === mode);
   if (st) list = list.filter(p => p.status === st);
@@ -13,7 +14,7 @@ function viewPeople(params){
     <div class="row"><h1>People</h1><span class="spacer"></span>
       <a class="btn" href="#/people/import">⬆ Import from Excel</a>
       <button class="primary" onclick="personForm()">+ New person</button></div>
-    <div class="sub">${list.length} of ${db.people.length} people${q || svc || mode || st ? ' · <a href="#/people">clear filters</a>' : ''}</div>
+    <div class="sub">${list.length} of ${scoped.length} people${q || svc || mode || st ? ' · <a href="#/people">clear filters</a>' : ''}</div>
     <div class="row" style="margin-bottom:12px">
       <input id="pq" placeholder="Filter: name, e-mail, ticket ID…" value="${esc(q)}" style="min-width:220px">
       <select id="psvc"><option value="">All Services</option>${sortHu(db.services, s => s.name).map(s => `<option value="${s.id}"${s.id === svc ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}
@@ -21,9 +22,9 @@ function viewPeople(params){
       <select id="pmode"><option value="">All Work Modes</option>${db.modes.map(m => `<option value="${esc(m.id)}"${m.id === mode ? ' selected' : ''}>${m.icon} ${esc(m.name)}</option>`).join('')}</select>
       <select id="pstatus"><option value="">All User Statuses</option>${Object.keys(USER_STATUS).map(s => `<option${s === st ? ' selected' : ''}>${s}</option>`).join('')}</select>
     </div>
-    ${list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Service</th><th>Job Role</th><th>Work Mode</th><th>User Status</th><th>Tickets</th><th>Desk</th><th>Assets</th><th>Document</th></tr></thead><tbody>${list.map(p => {
+    ${list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>City / Office</th><th>Service</th><th>Job Role</th><th>Work Mode</th><th>User Status</th><th>Tickets</th><th>Desk</th><th>Assets</th><th>Document</th></tr></thead><tbody>${list.map(p => {
       const pa = personAssets(p.id), all = [...pa.direct, ...pa.onDesk];
-      return `<tr><td><a href="#/person/${p.id}">${esc(p.name)}</a><br><small class="muted">${esc(p.email)}</small></td>
+      return `<tr><td><a href="#/person/${p.id}">${esc(p.name)}</a><br><small class="muted">${esc(p.email)}</small></td><td>${esc(officeLabel(p.officeId))}</td>
         <td>${p.serviceId ? `<a href="#/people?service=${p.serviceId}">${esc(serviceName(p.serviceId))}</a>` : '<span class="muted">–</span>'}</td>
         <td>${esc(roleName(p.roleId)) || '<span class="muted">–</span>'}</td><td>${modePill(p.mode)}</td>
         <td>${userPill(p.status)}${p.isd ? ' <span class="pill acc">ISD</span>' : ''}${openReturns(p.id).length ? `<br><span class="pill ${openReturns(p.id).some(returnOverdue) ? 'bad' : openReturns(p.id).some(r => returnDue(r)) ? 'warn' : ''}">↩ ${openReturns(p.id).length} awaiting</span>` : ''}</td>
@@ -119,6 +120,7 @@ function viewPerson(id){
       <button onclick="personForm(person('${p.id}'))">✎ Edit</button>
       <button class="danger" onclick="deletePerson('${p.id}')">Delete</button></div>
     <div class="sub row" style="gap:10px">
+      <span>Location: <b>${esc(officeCountry(p.officeId).name || '–')} · ${esc(officeLabel(p.officeId))}</b></span>
       <span>User Status: ${userPill(p.status)}</span>
       ${p.suspension ? `<span>Suspended: <b>${esc(p.suspension.start)} – ${esc(p.suspension.end)}</b></span>` : ''}
       ${p.endDate ? `<span>End of Employment: <b>${esc(p.endDate)}</b></span>` : ''}
@@ -164,7 +166,7 @@ function viewPerson(id){
 }
 function personForm(p, onCreated){
   const isNew = !p;
-  p = p || {name:'', email:'', serviceId:'', roleId:'', mode:db.modes[0].id, note:''};
+  p = p || {name:'', email:'', serviceId:'', roleId:'', mode:db.modes[0].id, note:'', officeId:scope.officeId || scopeOfficeIds()[0]};
   openDialog(`
     <h3>${isNew ? 'New person' : 'Edit person'}</h3>
     <label class="f">Full Name</label><input name="name" required value="${esc(p.name)}">
@@ -173,6 +175,7 @@ function personForm(p, onCreated){
       <div><label class="f">Service</label><select name="serviceId">${selOpts(sortHu(db.services, s => s.name), p.serviceId, s => s.name, '– none –')}</select></div>
       <div><label class="f">Job Role</label><select name="roleId">${selOpts(sortHu(db.roles, r => r.name), p.roleId, r => r.name, '– none –')}</select></div>
     </div>
+    <label class="f">City / Office</label><select name="officeId">${sortHu(accessibleOffices(), o => o.name).map(o => `<option value="${o.id}"${o.id === p.officeId ? ' selected' : ''}>${esc(officeCountry(o.id).name)} · ${esc(o.name)}</option>`).join('')}</select>
     <label class="cb"><input type="checkbox" name="isd"${p.isd ? ' checked' : ''}> ISD Member</label>
     <label class="f">Work Mode</label>
     <select name="mode">${db.modes.map(m => `<option value="${esc(m.id)}"${m.id === p.mode ? ' selected' : ''}>${m.icon} ${esc(m.name)}</option>`).join('')}</select>
@@ -180,7 +183,7 @@ function personForm(p, onCreated){
     <label class="f">Note (e.g. home address, phone)</label><textarea name="note">${esc(p.note)}</textarea>
     ${dlgActions(isNew ? 'Create' : 'Save')}`,
     data => {
-      const v = {name:data.name.trim(), email:data.email.trim(), serviceId:data.serviceId || null, roleId:data.roleId || null, mode:data.mode, isd:!!data.isd, note:data.note};
+      const v = {name:data.name.trim(), email:data.email.trim(), serviceId:data.serviceId || null, roleId:data.roleId || null, mode:data.mode, isd:!!data.isd, officeId:data.officeId, note:data.note};
       if (isNew){
         const n = {id:uid(), ...v, status:'Active', tickets:[]}; db.people.push(n); save();
         if (onCreated) onCreated(n); else location.hash = '#/person/' + n.id;
@@ -220,7 +223,7 @@ let pimp = null;
 async function readPeopleFile(file){
   try {
     const t = await readTable(file, 'People');
-    pimp = {fileName:file.name, headers:t.headers, rows:t.rows, map:guessColumns(t.headers, PEOPLE_FIELDS), svcMap:{}, allowDup:false, defMode:''};
+    pimp = {fileName:file.name, headers:t.headers, rows:t.rows, map:guessColumns(t.headers, PEOPLE_FIELDS), svcMap:{}, allowDup:false, defMode:'', officeId:scope.officeId || scopeOfficeIds()[0]};
     render();
   } catch(e){ alert('Could not read the file: ' + e.message); }
 }
@@ -265,7 +268,7 @@ function runPeopleImport(){
       if (!created.has(k)){ const s = {id:uid(), name:p.unknownSvc, note:'Created during import'}; db.services.push(s); created.set(k, s.id); }
       svcId = created.get(k);
     }
-    db.people.push({id:uid(), name:p.name, email:'', serviceId:svcId, roleId:null, mode:p.mode, status:'Active', tickets:[], note:''});
+    db.people.push({id:uid(), name:p.name, email:'', serviceId:svcId, roleId:null, mode:p.mode, status:'Active', tickets:[], officeId:pimp.officeId, note:''});
   }
   log(null, `${ok.length} people imported (${pimp.fileName})${created.size ? ` · new Services: ${[...created.keys()].length}` : ''}`, 'created');
   save();
@@ -281,6 +284,7 @@ function viewPeopleImport(){
       <h2>2. Columns – ${esc(pimp.fileName)} (${pimp.rows.length} rows)</h2>
       <div class="card"><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px 16px">
         ${PEOPLE_FIELDS.map(f => `<div><label class="f">${f.label} *</label>${mapSelect(f, pimp.headers, pimp.map, 'data-pmap')}</div>`).join('')}</div>
+        <div style="max-width:320px"><label class="f">Add people to office</label><select id="pOffice">${sortHu(accessibleOffices().filter(o => canAt('people.import', o.id)), o => o.name).map(o => `<option value="${o.id}"${o.id === pimp.officeId ? ' selected' : ''}>${esc(officeCountry(o.id).name)} · ${esc(o.name)}</option>`).join('')}</select></div>
         <div style="max-width:320px"><label class="f">Work Mode for rows without one</label><select id="pDefMode"><option value="">– report as an error –</option>${db.modes.map(m => `<option value="${esc(m.id)}"${pimp.defMode === m.id ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select></div>
         <p class="muted" style="font-size:12px;margin:8px 0 0">Only these three values are needed. E-mail, Job Role and the rest can be set later. Existing people are never changed by the import.</p></div>
       ${unknown.length ? `<h2>⚠️ Unknown Service (${unknown.length})</h2><div class="warnbox" style="font-size:14px">The file names a Service that is not in the system yet. Choose what to do:</div>
@@ -320,6 +324,7 @@ function bindPeopleImport(){
   document.querySelectorAll('[data-svc]').forEach(s => s.addEventListener('change', () => { pimp.svcMap[s.dataset.svc] = s.value; render(); }));
   $('#pAllowDup').addEventListener('change', e => { pimp.allowDup = e.target.checked; render(); });
   $('#pDefMode').addEventListener('change', e => { pimp.defMode = e.target.value; render(); });
+  $('#pOffice').addEventListener('change', e => { pimp.officeId = e.target.value; render(); });
 }
 const PEOPLE_TEMPLATE = [['Full Name', 'Service', 'Work Mode'], ['Sample Sarah', 'Customer Support', 'Onsite'], ['Example Eric', 'IT Support', 'Hybrid'], ['Test Tina', 'Finance', 'WFH']];
 async function downloadPeopleTemplate(){

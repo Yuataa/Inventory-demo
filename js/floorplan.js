@@ -5,15 +5,16 @@
 
 function curOffice(params){
   const q = params && params.get('office');
-  if (q && office(q)) try { localStorage.setItem(OFFICE_KEY, q); } catch(e) {}
-  let id = q; if (!id) try { id = localStorage.getItem(OFFICE_KEY); } catch(e) {}
-  return office(id) || sortHu(db.offices, o => o.name)[0];
+  if (q && accessibleOffices().some(o => o.id === q)){ Object.assign(scope, {countryId:office(q).countryId, officeId:q}); saveScope(); }
+  const ids = scopeOfficeIds();
+  return office(scope.officeId) || sortHu(db.offices.filter(o => ids.includes(o.id)), o => o.name)[0];
 }
 function viewRooms(params){
   const o = curOffice(params), rooms = sortHu(officeRooms(o.id), r => r.name), pool = sortHu(sitePool(o.id), a => a.tag);
   return `
     <div class="row"><h1>Floorplan</h1><span class="spacer"></span><button class="primary" onclick="roomForm()">+ New room</button></div>
-    <div class="officebar"><label class="muted">Office</label><select id="fpOffice">${sortHu(db.offices, x => x.name).map(x => `<option value="${x.id}"${x.id === o.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+    <div class="officebar"><label class="muted">Office</label><select id="fpOffice">${sortHu(accessibleOffices().filter(x => x.countryId === o.countryId), x => x.name).map(x => `<option value="${x.id}"${x.id === o.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+      <button class="sm" onclick="countryForm()">+ New country</button><button class="sm" onclick="countryForm(country('${o.countryId}'))">✎ Edit country</button><button class="sm danger" onclick="deleteCountry('${o.countryId}')">Delete country</button>
       <button class="sm" onclick="officeForm()">+ New office</button><button class="sm" onclick="officeForm(office('${o.id}'))">✎ Edit office</button><button class="sm danger" onclick="deleteOffice('${o.id}')">Delete office</button>
       <span class="muted">${rooms.length} rooms · ID ${esc(o.code || o.id)}</span></div>
     ${rooms.length ? `<div class="grid room-cards">${rooms.map(r => {
@@ -37,24 +38,45 @@ function placeFromSite(id, roomId){
   if (!roomId || a.holder.kind !== 'site' || (room(roomId) || {}).officeId !== a.holder.id) return;
   setHolder(a, {kind:'office', id:roomId}); save(); render();
 }
+function countryForm(c){
+  const isNew = !c; c = c || {name:'', code:''};
+  openDialog(`<h3>${isNew ? 'New country' : 'Edit country'}</h3><div class="two"><div><label class="f">Country name</label><input name="name" required value="${esc(c.name)}" placeholder="e.g. Poland"></div>
+    <div><label class="f">Code</label><input name="code" required value="${esc(c.code)}" placeholder="e.g. PL"></div></div>${dlgActions(isNew ? 'Create' : 'Save')}`,
+    data => {
+      const name = data.name.trim();
+      if (db.countries.some(x => x !== c && norm(x.name) === norm(name))){ alert('A country with this name already exists.'); return false; }
+      clog(`Country ${isNew ? 'created' : 'updated'}: ${name}`);
+      if (isNew) db.countries.push({id:uid(), name, code:data.code.trim().toUpperCase()}); else Object.assign(c, {name, code:data.code.trim().toUpperCase()});
+      save(); render();
+    });
+}
+function deleteCountry(id){
+  const c = country(id), n = db.offices.filter(o => o.countryId === id).length;
+  if (n){ alert(`${c.name} still has ${n} office(s). Delete or move them first.`); return; }
+  if (db.countries.length < 2){ alert('The last country cannot be deleted.'); return; }
+  if (!confirm(`Delete ${c.name}?`)) return;
+  clog(`Country deleted: ${c.name}`); db.countries = db.countries.filter(x => x !== c); save(); render();
+}
 function officeForm(o){
-  const isNew = !o; o = o || {name:'', code:''};
-  openDialog(`<h3>${isNew ? 'New office' : 'Edit office'}</h3><div class="two"><div><label class="f">Office Name</label><input name="name" required value="${esc(o.name)}" placeholder="e.g. Debrecen Office"></div>
+  const isNew = !o; o = o || {name:'', code:'', countryId:scope.countryId};
+  openDialog(`<h3>${isNew ? 'New office' : 'Edit office'}</h3>
+    ${isNew ? `<label class="f">Country</label><select name="countryId">${sortHu(db.countries, c => c.name).map(c => `<option value="${c.id}"${c.id === o.countryId ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select>` : `<p class="muted">Country: ${esc((country(o.countryId) || {}).name || '–')}</p>`}
+    <div class="two"><div><label class="f">Office Name</label><input name="name" required value="${esc(o.name)}" placeholder="e.g. Debrecen Office"></div>
     <div><label class="f">Office ID (unique)</label><input name="code" required value="${esc(o.code)}" placeholder="e.g. DEB"></div></div>${dlgActions(isNew ? 'Create' : 'Save')}`,
     data => {
       const name = data.name.trim(), code = data.code.trim().toUpperCase();
       if (db.offices.some(x => x !== o && norm(x.name) === norm(name))){ alert('An office with this name already exists.'); return false; }
       if (db.offices.some(x => x !== o && norm(x.code) === norm(code))){ alert('This Office ID is already used.'); return false; }
       clog(`Office ${isNew ? 'created' : 'updated'}: ${name}`);
-      if (isNew){ const n = {id:uid(), name, code}; db.offices.push(n); save(); location.hash = '#/rooms?office=' + n.id; }
+      if (isNew){ const n = {id:uid(), name, code, countryId:data.countryId}; db.offices.push(n); save(); location.hash = '#/rooms?office=' + n.id; }
       else { Object.assign(o, {name, code}); save(); render(); }
     });
 }
 // an office only goes when nothing depends on it, so no room, asset or shipment is lost silently
 function deleteOffice(id){
-  const o = office(id), rooms = officeRooms(id), site = sitePool(id);
+  const o = office(id), rooms = officeRooms(id), site = db.assets.filter(a => a.officeId === id), ppl = db.people.filter(p => p.officeId === id);
   const ships = db.projects.flatMap(pr => pr.shipments).filter(s => (s.fromOfficeId === id || s.toOfficeId === id) && s.status !== 'Received');
-  const why = [rooms.length && `${rooms.length} room(s)`, site.length && `${site.length} unplaced asset(s)`, ships.length && `${ships.length} active shipment(s)`].filter(Boolean);
+  const why = [rooms.length && `${rooms.length} room(s)`, site.length && `${site.length} asset(s)`, ppl.length && `${ppl.length} person/people`, ships.length && `${ships.length} active shipment(s)`].filter(Boolean);
   if (db.offices.length < 2){ alert('The last office cannot be deleted.'); return; }
   if (why.length){ alert(`${o.name} cannot be deleted while it has:\n\n• ${why.join('\n• ')}\n\nMove or remove these first.`); return; }
   if (!confirm(`Delete ${o.name}?`)) return;
@@ -66,7 +88,7 @@ function roomForm(r){
   openDialog(`
     <h3>${isNew ? 'New room' : 'Room details'}</h3>
     <label class="f">Name</label><input name="name" required value="${esc(r.name)}" placeholder="e.g. 2.12 – Development Office">
-    ${isNew ? `<label class="f">Office</label><select name="officeId">${sortHu(db.offices, o => o.name).map(o => `<option value="${o.id}"${o.id === curOffice().id ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select>` : `<p class="muted">Office: ${esc((office(r.officeId) || {}).name || '?')}</p>`}
+    ${isNew ? `<label class="f">Office</label><select name="officeId">${sortHu(accessibleOffices().filter(o => o.countryId === scope.countryId), o => o.name).map(o => `<option value="${o.id}"${o.id === curOffice().id ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select>` : `<p class="muted">Office: ${esc((office(r.officeId) || {}).name || '?')}</p>`}
     <div class="two">
       <div><label class="f">Room type</label><select name="kind">${Object.entries(ROOM_KINDS).map(([k, v]) => `<option value="${k}"${k === r.kind ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
       <div><label class="f">Floor / building</label><input name="floor" value="${esc(r.floor)}"></div>
@@ -78,7 +100,7 @@ function roomForm(r){
     ${dlgActions(isNew ? 'Create' : 'Save')}`,
     data => {
       const v = {name:data.name.trim(), kind:data.kind, floor:data.floor.trim(), w:+data.w || 900, h:+data.h || 500, serviceIds:db.services.filter(s => data['svc_' + s.id]).map(s => s.id)};
-      if (isNew){ const n = {id:uid(), ...v, officeId:data.officeId}; db.rooms.push(n); save(); location.hash = '#/room/' + n.id; }
+      if (isNew){ const n = {id:uid(), ...v, officeId:data.officeId || curOffice().id}; db.rooms.push(n); save(); location.hash = '#/room/' + n.id; }
       else { Object.assign(r, v); for (const o of roomObjs(r.id)) clampObj(o); save(); render(); }
     });
 }
@@ -182,7 +204,7 @@ function objPanel(o, ed){
     <select data-f="owner">
       <option value=""${ownerVal === '' ? ' selected' : ''}>– free / hot-desk –</option>
       <option value="shared"${ownerVal === 'shared' ? ' selected' : ''}>🔁 Shared / shift (not one person's)</option>
-      <optgroup label="Assigned to a person">${sortHu(db.people, x => x.name).map(x => `<option value="${x.id}"${x.id === o.personId ? ' selected' : ''}>👤 ${esc(x.name)}</option>`).join('')}</optgroup>
+      <optgroup label="Assigned to a person">${sortHu(db.people.filter(x => x.officeId === (room(o.roomId) || {}).officeId), x => x.name).map(x => `<option value="${x.id}"${x.id === o.personId ? ' selected' : ''}>👤 ${esc(x.name)}</option>`).join('')}</optgroup>
     </select>
     ${o.shared ? `<label class="f">Used by (e.g. Service, shifts)</label><input data-f="sharedNote" value="${esc(o.sharedNote || '')}" placeholder="e.g. Customer Support – 2 shifts">` : ''}
     <label class="f">🔌 Floor port ID</label><input data-f="port" value="${esc(o.port || '')}" placeholder="e.g. R4-5-15" class="tag">`}

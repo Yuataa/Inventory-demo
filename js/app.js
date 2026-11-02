@@ -30,8 +30,11 @@ function render(){
   lastRoute = path;
   const navOf = {asset:'assets', import:'assets', person:'people', room:'rooms', project:'projects'};
   document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.r === (navOf[r] || r)));
+  ensureScope(); renderScope();
   const need = routePerm(r, parts[1]);
   if (need && !can(need)){ v.innerHTML = deniedHtml(); return; }
+  const gate = tour.on ? null : routeGate(r, parts[1]);
+  if (gate){ v.innerHTML = gate; return; }
   switch (r){
     case 'assets': v.innerHTML = viewAssets(params); bindAssetFilters(); break;
     case 'asset': v.innerHTML = viewAsset(parts[1]); break;
@@ -58,6 +61,7 @@ function render(){
     case 'tour': v.innerHTML = viewDashboard(); setTimeout(startTour, 300); break;
     default: v.innerHTML = viewDashboard();
   }
+  renderScope();
   applySorts();
   applyPerms();
   updateBulk();
@@ -65,7 +69,7 @@ function render(){
 }
 function renderUserChip(){
   const u = currentUser(), el = $('#userChip');
-  if (el) el.innerHTML = `👤 ${esc(u)} · ${esc(currentAccount().role)}`;
+  if (el) el.innerHTML = `👤 ${esc(u)} · ${esc(roleLabel(currentAccount().role))}`;
 }
 
 window.addEventListener('hashchange', render);

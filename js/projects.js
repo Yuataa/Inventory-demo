@@ -53,9 +53,10 @@ function reservedBy(assetId){
 }
 // free stock for a slot: working, in storage, not reserved by anyone else
 function slotCandidates(kind, current){
+  const inOffices = new Set(scopeOfficeIds());
   return sortHu(db.assets.filter(a => {
     if (a.id === current) return true;
-    if (a.status !== 'ok' || !['storage', 'site'].includes(a.holder.kind) || reservedBy(a.id)) return false;
+    if (a.status !== 'ok' || !['storage', 'site'].includes(a.holder.kind) || reservedBy(a.id) || !inOffices.has(a.officeId)) return false;
     return kind === 'other' ? a.type !== 'pc' && a.type !== 'monitor' : a.type === kind;
   }), a => modelName(a) + a.tag);
 }
@@ -82,7 +83,7 @@ const demandText = pr => pr.demand.map(l => `${l.qty} × ${typeLabel(l.typeId)}`
 
 function viewProjects(params){
   const q = params.get('q') || '', st = params.get('status') || '';
-  let list = db.projects;
+  let list = scopedProjects();
   if (st === 'active') list = list.filter(isActive); else if (st) list = list.filter(p => p.status === st);
   if (q){ const n = norm(q); list = list.filter(pr => norm([pr.name, pr.ticket, pr.owner, pr.note, ...pr.participants.map(x => (person(x.personId) || {}).name)].join(' ')).includes(n)); }
   list = sortHu(list, pr => (isActive(pr) ? '0' : '1') + (pr.pickupDate || '9999'));
@@ -94,9 +95,9 @@ function viewProjects(params){
       <select id="prst"><option value="">All statuses</option><option value="active"${st === 'active' ? ' selected' : ''}>Active (not closed)</option>
         ${Object.entries(PROJECT_STATUS).map(([k, v]) => `<option value="${k}"${k === st ? ' selected' : ''}>${v}</option>`).join('')}</select>
     </div>
-    ${list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Project name</th><th>Activities</th><th>Participants / demand</th><th>Pickup / deadline</th><th>Owner</th><th>Ticket</th><th>Status</th><th>Preparation</th><th>Note</th></tr></thead><tbody>${list.map(pr => {
+    ${list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Project name</th><th>Offices</th><th>Activities</th><th>Participants / demand</th><th>Pickup / deadline</th><th>Owner</th><th>Ticket</th><th>Status</th><th>Preparation</th><th>Note</th></tr></thead><tbody>${list.map(pr => {
       const pct = projectProgress(pr);
-      return `<tr><td><a href="#/project/${pr.id}"><b>${esc(pr.name)}</b></a></td><td>${actPills(pr)}</td>
+      return `<tr><td><a href="#/project/${pr.id}"><b>${esc(pr.name)}</b></a></td><td class="muted">${esc(projectOffices(pr).map(officeLabel).join(', '))}</td><td>${actPills(pr)}</td>
         <td>${pr.participants.map(x => esc((person(x.personId) || {}).name || '?')).join(', ') || (pr.demand.length ? `<span class="muted">${esc(demandText(pr))}</span>` : pr.shipments.length ? `<span class="muted">${esc(pr.shipments.map(shipRoute).join(', '))}</span>` : '<span class="muted">–</span>')}</td>
         <td style="white-space:nowrap">${fmtDate(pr.pickupDate)}</td><td>${esc(pr.owner) || '<span class="muted">–</span>'}</td>
         <td class="tag">${esc(pr.ticket) || '<span class="muted">–</span>'}</td><td>${projectStatusPill(pr.status)}</td>
@@ -145,7 +146,7 @@ function projectForm(pr){
       const v = {name:data.name.trim(), owner:data.owner.trim(), pickupDate:data.pickupDate, ticket:data.ticket.trim(), note:data.note.trim(), status:data.status,
         targetServiceId:data.targetServiceId || null, targetRoomId:data.targetRoomId || null, accessories:data.accessories.trim(), activities};
       if (isNew){
-        const n = {id:uid(), ...v, created:Date.now(), completedAt:null, participants:[], demand:[], shipments:[], replacements:[]};
+        const n = {id:uid(), ...v, officeId:scope.officeId || scopeOfficeIds()[0], created:Date.now(), completedAt:null, participants:[], demand:[], shipments:[], replacements:[]};
         let ship = null;
         if (activities.includes('shipment') && (data.from || data.to || data.recvP || shipPicked(tmp, data).length)){ ship = readShipment(tmp, data); if (!ship) return false; }
         db.projects.push(n); plog(n.id, `Project created: ${n.name} (${activities.map(a => ACTIVITIES[a]).join(', ')})`);
@@ -220,7 +221,7 @@ const shipOffice = id => (office(id) || {}).name || '–';
 function shipmentHtml(pr, ro){
   const rows = pr.shipments.map(s => {
     const moving = s.fromOfficeId && s.toOfficeId;
-    return `<tr data-ship="${s.id}"><td>${esc(moving ? shipOffice(s.fromOfficeId) : s.from || '–')}</td><td>${esc(shipOffice(s.toOfficeId))}</td>
+    return `<tr data-ship="${s.id}"><td>${esc(officeCountry(s.fromOfficeId).name || '–')}</td><td>${esc(moving ? shipOffice(s.fromOfficeId) : s.from || '–')}</td><td>${esc(officeCountry(s.toOfficeId).name || '–')}</td><td>${esc(shipOffice(s.toOfficeId))}</td>
       <td>${s.sendPersonId ? personLink(s.sendPersonId) : '<span class="muted">–</span>'}</td><td>${s.recvPersonId ? personLink(s.recvPersonId) : '<span class="muted">–</span>'}</td>
       <td>${s.assetIds.map(asset).filter(Boolean).map(a => `${aidLink(a)} <small class="muted">${esc(assetName(a))}</small>`).join('<br>') || '<span class="muted">–</span>'}</td>
       <td><span class="pill ${{Sent:'warn', Received:'ok'}[s.status] || ''}">${s.status === 'Sent' ? 'Sent, awaiting receipt' : s.status}</span>${s.required === false ? ' <span class="pill">Optional</span>' : ''}${s.receivedAt ? `<br><small class="muted">${fmtTime(s.receivedAt)}</small>` : ''}</td>
@@ -229,7 +230,7 @@ function shipmentHtml(pr, ro){
         ${s.status === 'Sent' ? `<button class="sm primary" onclick="shipAction('${pr.id}','${s.id}','receive')">Record receipt</button> <button class="sm" onclick="shipAction('${pr.id}','${s.id}','cancel')">Cancel sending</button>` : ''}</td></tr>`;
   }).join('');
   return `<div class="row"><h2>📦 Shipments</h2><span class="spacer"></span><button class="sm" onclick="shipmentDialog('${pr.id}')">+ Shipment</button></div>
-    ${pr.shipments.length ? `<div class="tbl-wrap"><table><thead><tr><th>Sending Office</th><th>Receiving Office</th><th>Sending Person</th><th>Receiving Person</th><th>Shipment Items</th><th>Shipment Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No shipments in this project.</div>'}`;
+    ${pr.shipments.length ? `<div class="tbl-wrap"><table><thead><tr><th>Sending Country</th><th>Sending Office</th><th>Receiving Country</th><th>Receiving Office</th><th>Sending Person</th><th>Receiving Person</th><th>Shipment Items</th><th>Shipment Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No shipments in this project.</div>'}`;
 }
 function viewProject(id){
   const pr = project(id);
@@ -412,15 +413,17 @@ const inOpenShipment = id => db.projects.some(pr => pr.shipments.some(s => s.sta
 function shipCandidates(pr, fromId){
   const own = new Set(projectAssetIds(pr));
   return sortHu(db.assets.filter(a => !inOpenShipment(a.id) && a.holder.kind !== 'transit' && !isOut(a) &&
-    (fromId ? a.holder.kind === 'storage' || assetOfficeId(a) === fromId : own.has(a.id))), a => (own.has(a.id) ? '0' : '1') + a.tag).map(a => [a, own.has(a.id)]);
+    (fromId ? a.holder.kind !== 'person' && assetOfficeId(a) === fromId : own.has(a.id))), a => (own.has(a.id) ? '0' : '1') + a.tag).map(a => [a, own.has(a.id)]);
 }
 function shipFields(){
-  const offs = sortHu(db.offices, o => o.name), ppl = sortHu(db.people, p => p.name);
-  const opts = `<option value="">– none –</option>` + offs.map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('');
+  const ppl = sortHu(db.people, p => p.name), cs = sortHu(db.countries, c => c.name);
+  const cOpts = `<option value="">– none –</option>` + cs.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   const pOpts = `<option value="">– none –</option>` + ppl.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
   return `<div class="two">
-    <div><label class="f">Sending Office</label><select name="from" id="shFrom">${opts}</select></div>
-    <div><label class="f">Receiving Office</label><select name="to">${opts}</select></div>
+    <div><label class="f">Sending Country</label><select id="shFromC">${cOpts}</select></div>
+    <div><label class="f">Receiving Country</label><select id="shToC">${cOpts}</select></div>
+    <div><label class="f">Sending Office</label><select name="from" id="shFrom"><option value="">– none –</option></select></div>
+    <div><label class="f">Receiving Office</label><select name="to" id="shTo"><option value="">– none –</option></select></div>
     <div><label class="f">Sending Person</label><select name="sendP">${pOpts}</select></div>
     <div><label class="f">Receiving Person</label><select name="recvP">${pOpts}</select></div></div>
     <label class="f">Shipment Items</label><div class="checklist" id="shItems"></div>
@@ -433,6 +436,7 @@ function readShipment(pr, data){
   const assetIds = shipPicked(pr, data);
   if (!assetIds.length){ alert('Choose at least one asset.'); return null; }
   if (data.from && data.from === data.to){ alert('The Sending and Receiving Office must be different.'); return null; }
+  if (data.from && !canAt('projects.shipCreate', data.from)){ alert('You do not have shipment access for the Sending Office.'); return null; }
   if (!data.to && !data.recvP){ alert('Choose a Receiving Office or a Receiving Person.'); return null; }
   if (data.from && !data.to){ alert('Choose the Receiving Office.'); return null; }
   if (data.to && !data.from){ alert('Choose the Sending Office.'); return null; }
@@ -444,6 +448,9 @@ function bindShipFields(pr){
     const c = shipCandidates(pr, $('#shFrom').value);
     $('#shItems').innerHTML = c.map(([a, own]) => `<label><input type="checkbox" name="a_${a.id}"> <b class="tag">${esc(a.tag)}</b> ${esc(assetName(a))} <small class="muted">${own ? '📋 ' : ''}${esc(whereText(a))}</small></label>`).join('') || '<span class="muted">No assets available. Choose a Sending Office or select project assets first.</span>';
   };
+  const offices = (sel, cid, usable) => { sel.innerHTML = `<option value="">– none –</option>` + sortHu(db.offices.filter(o => o.countryId === cid && usable(o)), o => o.name).map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join(''); };
+  $('#shFromC').addEventListener('change', e => { offices($('#shFrom'), e.target.value, o => canAt('projects.shipCreate', o.id)); fill(); });
+  $('#shToC').addEventListener('change', e => offices($('#shTo'), e.target.value, () => true));
   $('#shFrom').addEventListener('change', fill); fill();
 }
 function shipmentDialog(prId){

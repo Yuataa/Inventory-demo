@@ -4,13 +4,13 @@
 // ---------- filtering (shared by the list and the dashboard, so the counts always match) ----------
 function filterAssets(P){
   const f = k => P.get(k) || '';
-  let list = db.assets;
+  let list = scopedAssets(f('view') === 'transit');
   const v = ASSET_VIEWS[f('view')];
   if (v) list = list.filter(v.test);
   if (f('type')) list = list.filter(a => a.type === f('type'));
   if (f('model')) list = list.filter(a => a.modelId === f('model'));
   if (f('loc')) list = list.filter(a => a.holder.kind === f('loc'));
-  if (f('status')) list = list.filter(a => a.status === f('status'));
+  if (f('status')) list = list.filter(f('status') === 'active' ? isActiveAsset : a => a.status === f('status'));
   if (f('service')) list = list.filter(a => assetServiceIs(a, f('service')));
   if (f('office')) list = list.filter(a => assetOfficeId(a) === f('office'));
   if (f('room')) list = list.filter(a => assetRoomId(a) === f('room'));
@@ -35,6 +35,7 @@ function tileQuery(id){
   const d = db.settings.dashboard.defaults, p = new URLSearchParams();
   const set = (k, v) => { if (v) p.set(k, v); };
   if (id !== 'total') p.set('view', id);
+  if (id !== 'health') p.set('status', 'active');
   if (id === 'office') set('room', d.officeRoom);
   if (id === 'assigned'){ set('mode', d.assignedMode); set('service', d.assignedService); }
   if (id === 'storage') set('type', d.storageType);
@@ -53,30 +54,32 @@ function dashTile(it){
       <a href="#/assets?view=health&health=both">Both <b>${list.filter(a => isFaulty(a) && isAged(a)).length}</b></a></div>`;
     return tile('#/assets' + (qs ? '?' + qs : ''), list.length, sub, it.breakdown ? typeBreak(list, qs) : '');
   }
-  if (it.id === 'returns') return tile('#/assets?view=awaiting', db.returns.filter(r => r.state === 'awaiting').length);
-  if (it.id === 'transit') return tile('#/assets?view=transit', db.assets.filter(a => a.holder.kind === 'transit').length);
-  if (it.id === 'projects') return tile('#/projects?status=active', db.projects.filter(isActive).length);
-  if (it.id === 'unsigned') return tile('#/docs?f=wait', db.docs.filter(d => !d.fileId).length);
-  return tile('#/docs', db.people.reduce((n, p) => n + uncovered(p.id).length, 0));
+  if (it.id === 'lost' || it.id === 'missing') return tile('#/assets?status=' + it.id, filterAssets(new URLSearchParams('status=' + it.id)).length);
+  if (it.id === 'faulty') return tile('#/assets?view=health&health=faulty', filterAssets(new URLSearchParams('view=health&health=faulty')).length);
+  if (it.id === 'returns'){ const ids = new Set(scopedAssets(true).map(a => a.id)); return tile('#/assets?view=awaiting', db.returns.filter(r => r.state === 'awaiting' && ids.has(r.assetId)).length); }
+  if (it.id === 'transit') return tile('#/assets?view=transit', filterAssets(new URLSearchParams('view=transit')).length);
+  if (it.id === 'projects') return tile('#/projects?status=active', scopedProjects().filter(isActive).length);
+  if (it.id === 'unsigned') return tile('#/docs?f=wait', scopedDocs().filter(d => !d.fileId).length);
+  return tile('#/docs', scopedPeople().reduce((n, p) => n + uncovered(p.id).length, 0));
 }
 function dashSection(id){
   if (id === 'warranty'){
-    const list = sortHu(db.assets.filter(a => { const w = warranty(a); return w.days !== null && w.days <= 60 && a.status !== 'retired'; }), a => a.warrantyUntil);
+    const list = sortHu(scopedAssets().filter(a => { const w = warranty(a); return w.days !== null && w.days <= 60 && a.status !== 'retired'; }), a => a.warrantyUntil);
     return list.length ? `<h2>⚠️ Warranty expired or expiring within 60 days (${list.length})</h2>${assetRows(list)}` : '';
   }
   if (id === 'models'){
-    const list = db.models.map(m => [m, db.assets.filter(a => a.modelId === m.id).length]).filter(x => x[1]).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const pool = scopedAssets(), list = db.models.map(m => [m, pool.filter(a => a.modelId === m.id).length]).filter(x => x[1]).sort((a, b) => b[1] - a[1]).slice(0, 10);
     return `<h2>Top models</h2>` + (list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Model</th><th>Type</th><th>Count</th></tr></thead><tbody>${list.map(([m, n]) =>
       `<tr><td><a href="#/assets?model=${m.id}">${esc(m.name)}</a></td><td><a href="#/assets?type=${encodeURIComponent(m.typeId)}">${typeIcon(m.typeId)} ${esc(typeLabel(m.typeId))}</a></td><td><a href="#/assets?model=${m.id}"><b>${n}</b></a></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">–</div>');
   }
-  if (id === 'services') return `<h2>By Service</h2><div class="grid">${sortHu(db.services, s => s.name).map(s => { const ppl = db.people.filter(p => p.serviceId === s.id);
+  if (id === 'services') return `<h2>By Service</h2><div class="grid">${sortHu(db.services, s => s.name).map(s => { const ppl = scopedPeople().filter(p => p.serviceId === s.id);
     return `<a class="card stat" href="#/people?service=${s.id}"><div class="n">${ppl.length}</div><div class="l">🧩 ${esc(s.name)} · ${db.modes.map(m => `${m.icon}${ppl.filter(p => p.mode === m.id).length}`).join(' ')}</div></a>`; }).join('') || '<div class="empty">No Services yet – create them in Settings.</div>'}</div>`;
   if (id === 'remote'){
-    const list = sortHu(db.people.filter(p => modeBehavior(p.mode) !== 'onsite'), p => p.name);
+    const list = sortHu(scopedPeople().filter(p => modeBehavior(p.mode) !== 'onsite'), p => p.name);
     return `<h2>WFH / Hybrid people</h2>` + (list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Service</th><th>Work Mode</th><th>Assets</th></tr></thead><tbody>${list.map(p =>
       `<tr><td>${personLink(p.id)}</td><td>${esc(serviceName(p.serviceId))}</td><td>${modePill(p.mode)}</td><td>${personAssets(p.id).direct.map(a => `<a class="chip" href="#/asset/${a.id}">${typeIcon(a.type)} ${esc(a.tag)}</a>`).join(' ') || '<span class="muted">–</span>'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Nobody in these modes.</div>');
   }
-  return `<h2>Recent events</h2>${logTable(db.log.slice(0, 8))}`;
+  return `<h2>Recent events</h2>${logTable(scopedLog().slice(0, 8))}`;
 }
 function viewDashboard(){
   const items = db.settings.dashboard.items.filter(i => i.visible);
@@ -91,7 +94,7 @@ const LOC_LABEL = {desk:'🪑 On a desk / in a rack', office:'🏢 In a room poo
 function viewAssets(params){
   const f = k => params.get(k) || '';
   const list = sortHu(filterAssets(params), a => a.tag), V = ASSET_VIEWS[f('view')], type = f('type'), mdl = f('model');
-  const filtered = [...params.keys()].length > 0;
+  const filtered = [...params.keys()].length > 0, all = scopedAssets(), offs = sortHu(db.offices.filter(o => scopeOfficeIds().includes(o.id)), o => o.name);
   const models = sortHu(db.models.filter(m => !type || m.typeId === type), m => m.name);
   const title = V ? V.title : mdl && model(mdl) ? model(mdl).name : type ? typeLabel(type) : 'Assets';
   const opt = (v, cur, l) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${l}</option>`;
@@ -101,20 +104,20 @@ function viewAssets(params){
       <button onclick="exportCSV()">⬇ CSV</button>
       <a class="btn" href="#/import">⬆ Import (Excel / Snipe-IT)</a>
       <button class="primary" onclick="assetForm(null, null, '${esc(type)}')">+ New asset</button></div>
-    <div class="sub">${list.length} of ${db.assets.length} assets${filtered ? ' · <a href="#/assets">clear filters</a>' : ''}</div>
+    <div class="sub" id="assetCounts">${list.length} shown · <b>${all.filter(isActiveAsset).length}</b> active · <a href="#/assets?status=lost">${all.filter(a => a.status === 'lost').length} Lost</a> · <a href="#/assets?status=missing">${all.filter(a => a.status === 'missing').length} Missing</a> · <a href="#/assets?view=health&health=faulty">${all.filter(isFaulty).length} Faulty</a>${filtered ? ' · <a href="#/assets">clear filters</a>' : ''}</div>
     ${V ? typeBreak(filterAssets(q), q.toString()) : ''}
     <div class="row filters" style="margin-bottom:12px">
       <input id="fq" placeholder="Filter: Asset ID, name, S/N, model…" value="${esc(f('q'))}" style="min-width:220px">
       <select id="fview" title="View"><option value="">All assets</option>${Object.entries(ASSET_VIEWS).map(([k, x]) => opt(k, f('view'), x.title)).join('')}</select>
       <select id="ftype" title="Asset Type"><option value="">All types</option>${sortHu(db.types, t => t.name).map(t => opt(t.id, type, `${t.icon} ${esc(t.name)}`)).join('')}</select>
       <select id="fmodel" title="Model"><option value="">All models</option>${models.map(m => opt(m.id, mdl, esc(m.name))).join('')}</select>
-      <select id="foffice" title="Office"><option value="">All Offices</option>${sortHu(db.offices, o => o.name).map(o => opt(o.id, f('office'), esc(o.name))).join('')}</select>
-      <select id="froom" title="Room"><option value="">All Rooms</option>${sortHu(db.rooms.filter(r => !f('office') || r.officeId === f('office')), r => roomPath(r)).map(r => opt(r.id, f('room'), esc(roomPath(r)))).join('')}</select>
-      <select id="fperson" title="Employee"><option value="">All employees</option>${sortHu(db.people, p => p.name).map(p => opt(p.id, f('person'), esc(p.name))).join('')}</select>
+      <select id="foffice" title="Office"><option value="">All Offices</option>${offs.map(o => opt(o.id, f('office'), esc(o.name))).join('')}</select>
+      <select id="froom" title="Room"><option value="">All Rooms</option>${sortHu(db.rooms.filter(r => offs.some(o => o.id === r.officeId) && (!f('office') || r.officeId === f('office'))), r => roomPath(r)).map(r => opt(r.id, f('room'), esc(roomPath(r)))).join('')}</select>
+      <select id="fperson" title="Employee"><option value="">All employees</option>${sortHu(scopedPeople(), p => p.name).map(p => opt(p.id, f('person'), esc(p.name))).join('')}</select>
       <select id="fsvc" title="Service"><option value="">All Services</option>${sortHu(db.services, s => s.name).map(s => opt(s.id, f('service'), esc(s.name))).join('')}</select>
       <select id="fmode" title="Work Mode"><option value="">All Work Modes</option>${db.modes.map(m => opt(m.id, f('mode'), `${m.icon} ${esc(m.name)}`)).join('')}</select>
       <select id="floc" title="Location"><option value="">Anywhere</option>${Object.entries(LOC_LABEL).map(([k, v]) => opt(k, f('loc'), v)).join('')}</select>
-      <select id="fstatus" title="Status"><option value="">All statuses</option>${Object.entries(STATUS).map(([k, s]) => opt(k, f('status'), s.label)).join('')}</select>
+      <select id="fstatus" title="Status"><option value="">All statuses</option>${opt('active', f('status'), 'Active only')}${Object.entries(STATUS).map(([k, s]) => opt(k, f('status'), s.label)).join('')}</select>
       <select id="fwarr" title="Warranty"><option value="">Warranty: all</option>${opt('soon', f('warr'), 'Expires within 60 days')}${opt('bad', f('warr'), 'Expired')}${opt('none', f('warr'), 'Not set')}</select>
       ${f('view') === 'health' ? `<select id="fhealth" title="Category"><option value="">Faulty or Aged</option>${opt('faulty', f('health'), 'Faulty')}${opt('aged', f('health'), 'Aged')}${opt('both', f('health'), 'Faulty and Aged')}</select>
       <select id="fage" title="Minimum age"><option value="">Any age</option>${[3, 4, 5, 6, 7, 8, 10].map(y => opt(String(y), f('age'), `${y}+ years`)).join('')}</select>` : ''}
@@ -161,6 +164,10 @@ async function confirmMove(list, h){
   if (!list.length) return true;
   const moving = list.filter(a => a.holder.kind === 'transit');
   if (moving.length){ alert(`${moving.map(a => a.tag).join(', ')} is in transit. Record the shipment as received first.`); return false; }
+  // the location of an asset only changes between offices through a shipment
+  const tOff = holderOffice(h), tCountry = h.kind === 'person' ? (office((person(h.id) || {}).officeId) || {}).countryId : null;
+  const away = list.filter(a => (tOff && tOff !== a.officeId) || (tCountry && tCountry !== (office(a.officeId) || {}).countryId));
+  if (away.length){ alert(`${away.map(a => a.tag).join(', ')} belongs to another ${tOff ? 'office' : 'country'}. Move it with a Shipment in Projects.`); return false; }
   const target = h.kind === 'person' ? person(h.id) : null, targetText = holderText(h);
   const notes = [], conflicts = [];
   const atOffice = list.filter(a => target && ['office', 'desk', 'site'].includes(a.holder.kind));
@@ -219,7 +226,7 @@ function toStorage(id){
   if (a.holder.kind === 'transit'){ alert('This asset is in transit. Record the shipment as received first.'); return; }
   openDialog(`<h3>↩ Return to Stock</h3>
     <div class="tbl-wrap"><table><thead><tr><th>Asset ID</th><th>Asset Name</th><th>Current Location</th></tr></thead><tbody><tr><td class="tag">${esc(a.tag)}</td><td>${esc(assetName(a))}</td><td>${esc(whereText(a))}</td></tr></tbody></table></div>
-    <div class="two"><div><label class="f">Return to</label><select name="target"><option value="storage">📦 In Stock</option>${sortHu(db.offices, o => o.name).map(o => `<option value="site:${o.id}">🏢 ${esc(o.name)}</option>`).join('')}${sortHu(db.rooms, r => roomPath(r)).map(r => `<option value="office:${r.id}">🏢 ${esc(roomPath(r))}</option>`).join('')}</select></div>
+    <div class="two"><div><label class="f">Return to</label><select name="target"><option value="storage">📦 In Stock</option><option value="site:${a.officeId}">🏢 ${esc(officeLabel(a.officeId))}</option>${sortHu(db.rooms.filter(r => r.officeId === a.officeId), r => roomPath(r)).map(r => `<option value="office:${r.id}">🏢 ${esc(roomPath(r))}</option>`).join('')}</select></div>
       <div><label class="f">Status after return</label><select name="status">${Object.entries(STATUS).map(([k, s]) => `<option value="${k}"${k === a.status ? ' selected' : ''}>${s.label}</option>`).join('')}</select></div></div>
     ${pid ? `<label class="cb"><input type="checkbox" name="mkdoc"> Create a return document</label>` : ''}
     ${dlgActions('Confirm return')}`,
@@ -276,12 +283,14 @@ function viewAsset(id){
       ${ret ? `<br><span style="font-size:14px">↩ <b>${RETURN_STATE[ret.state]}</b> from ${personLink(ret.personId)}${ret.state === 'awaiting' ? ` <button class="sm" onclick="toStorage('${a.id}')">Record return</button>` : ''}</span>` : ''}</div>
     <div class="row" style="margin-bottom:16px;align-items:flex-start">
       <span class="muted" style="padding-top:8px">Quick Move:</span>
-      <div style="min-width:320px;flex:0 1 460px">${picker('move', holderOptions(holderKey(a.holder)), {id:'moveSel', size:6, filters:true})}</div>
+      <div style="min-width:320px;flex:0 1 460px">${picker('move', holderOptions(holderKey(a.holder), {officeId:a.officeId}), {id:'moveSel', size:6, filters:true})}</div>
       <button class="primary" onclick="quickMove('${a.id}')">Move</button>
     </div>
     <div class="asset-head">
       ${img ? `<img class="photo" src="${img}" alt="${esc(modelName(a))}">` : `<div class="photo none" title="No image – upload one when editing">${typeIcon(a.type)}</div>`}
       <div class="card"><dl class="kv">
+        <dt>Country</dt><dd>${esc(officeCountry(a.officeId).name || '–')}</dd>
+        <dt>City / Office</dt><dd>${esc(officeLabel(a.officeId))}${a.holder.kind === 'transit' ? ' <small class="muted">(sent from here)</small>' : ''}</dd>
         <dt>Asset ID</dt><dd class="aid">${esc(a.tag)}</dd>
         <dt>Asset Name</dt><dd>${esc(assetName(a))}${a.name ? '' : ' <small class="muted">(model name)</small>'}</dd>
         <dt>Type</dt><dd>${typeLink(a)}</dd>
@@ -338,13 +347,16 @@ function modelOptions(typeId, cur){
 function assetForm(a, presetHolder, presetType){
   const isNew = !a;
   const t0 = presetType && db.types.some(t => t.id === presetType) ? presetType : 'monitor';
-  a = a || {type:t0, name:'', modelId:'', serial:'', status:'ok', holder:presetHolder || {kind:'storage'}, serviceId:null, custom:{}, note:'',
+  const newOffice = scope.officeId || scopeOfficeIds()[0];
+  a = a || {officeId:newOffice, type:t0, name:'', modelId:'', serial:'', status:'ok', holder:presetHolder || {kind:'storage'}, serviceId:null, custom:{}, note:'',
     arrived:todayIso(), warrantyUntil:'', supplier:'', orderNo:'', legacyTag:''};
   const preview = fmtAssetId(Math.max(db.seq.asset || 0, ...db.assets.map(x => assetNum(x.tag)), 0) + 1);
   const curImg = assetImg(a);
   let pendingImg = null, custom = {...a.custom}, curType = a.type;
   openDialog(`
     <h3>${isNew ? 'New asset' : 'Edit asset'}</h3>
+    ${isNew ? `<label class="f">Country / Office *</label><select name="officeId" id="fOffice">${sortHu(db.offices.filter(o => scopeOfficeIds().includes(o.id)), o => o.name).map(o => `<option value="${o.id}"${o.id === a.officeId ? ' selected' : ''}>${esc(officeCountry(o.id).name)} · ${esc(o.name)}</option>`).join('')}</select>`
+      : `<p class="muted">Location: ${esc(officeCountry(a.officeId).name || '–')} · ${esc(officeLabel(a.officeId))} <small>(changes through a Shipment)</small></p>`}
     <div class="two">
       <div><label class="f">Asset ID</label><input value="${isNew ? preview + ' (automatic)' : esc(a.tag)}" disabled class="aid"></div>
       <div><label class="f">Legacy ID / sticker (optional)</label><input name="legacyTag" value="${esc(a.legacyTag || '')}"></div>
@@ -357,7 +369,7 @@ function assetForm(a, presetHolder, presetType){
       <div><label class="f">Service (optional)</label><select name="serviceId">${selOpts(sortHu(db.services, s => s.name), a.serviceId, s => s.name, '–')}</select></div>
     </div>
     <label class="f">Location / assigned to</label>
-    ${picker('holder', holderOptions(holderKey(a.holder)), {size:5, filters:true})}
+    ${picker('holder', holderOptions(holderKey(a.holder), {officeId:a.officeId}), {size:5, filters:true})}
     <h3 style="margin-top:18px;font-size:14px">Custom fields</h3>
     <div id="fCustom">${customInputs(a.type, custom)}</div>
     <h3 style="margin-top:18px;font-size:14px">Purchase & warranty</h3>
@@ -394,7 +406,9 @@ function assetForm(a, presetHolder, presetType){
         !confirm(`An asset with serial number ${fields.serial} already exists. Save anyway?`)) return false;
       let target = a;
       if (isNew){
-        target = {id:uid(), tag:nextAssetId(), ...fields, holder:parseHolder(data.holder), placement:null, created:Date.now(), assignedAt:null};
+        const nh = parseHolder(data.holder);
+        if (holderOffice(nh) && holderOffice(nh) !== data.officeId){ alert('The chosen location belongs to another office.'); return false; }
+        target = {id:uid(), tag:nextAssetId(), officeId:data.officeId, ...fields, holder:nh, placement:null, created:Date.now(), assignedAt:null};
         db.assets.push(target);
         log(target.id, `Created: ${target.tag} · ${typeLabel(target.type)} · ${modelName(target)}`, 'created');
         const h = target.holder; target.holder = {kind:'storage'};
@@ -418,6 +432,7 @@ function assetForm(a, presetHolder, presetType){
     });
   const syncName = () => { const c = typeOf($('#fType').value).nameRule === 'custom'; $('#fNameLbl').textContent = c ? 'Asset Name *' : 'Asset Name'; $('#fName').placeholder = c ? 'e.g. computer name' : 'Empty = uses the Model Name'; };
   syncName(); $('#fType').addEventListener('change', syncName);
+  if (isNew) $('#fOffice').addEventListener('change', e => { const s = $('#dlgForm').elements.holder; s.innerHTML = holderOptions('storage', {officeId:e.target.value}); });
   const syncModel = () => { $('#fNewModel').style.display = $('#fModel').value === '__new' ? '' : 'none'; };
   $('#fModel').addEventListener('change', syncModel);
   $('#fType').addEventListener('change', e => {
@@ -445,7 +460,7 @@ function assetForm(a, presetHolder, presetType){
 // pick an existing asset and move it to holder h (person page "issue existing asset")
 function assignAssetDialog(h, title){
   const key = holderKey(h);
-  const cands = sortHu(db.assets.filter(a => holderKey(a.holder) !== key && a.status !== 'retired' && a.holder.kind !== 'transit'), a => (a.holder.kind === 'storage' ? '0' : '1') + a.tag);
+  const cands = sortHu(scopedAssets().filter(a => holderKey(a.holder) !== key && a.status !== 'retired' && a.holder.kind !== 'transit'), a => (a.holder.kind === 'storage' ? '0' : '1') + a.tag);
   if (!cands.length){ alert('There is no asset to move. Create one first.'); return; }
   openDialog(`<h3>${esc(title)}</h3><p class="muted" style="margin:0 0 6px">Target: <b>${esc(holderText(h))}</b></p>
     <label class="f">Asset</label>${picker('asset', cands.map(a => `<option value="${a.id}">${typeIcon(a.type)} ${esc(a.tag)} · ${esc(assetName(a))} · ${esc(a.serial)} — ${esc(whereText(a))}</option>`).join(''), {size:10, required:true})}
@@ -461,7 +476,7 @@ function swapDialog(oldId){
   const old = asset(oldId);
   if (old.holder.kind === 'storage'){ alert('An asset in stock does not need a swap – swaps are for assets in use.'); return; }
   if (old.holder.kind === 'transit'){ alert('This asset is in transit. Record the shipment as received first.'); return; }
-  const cands = sortHu(db.assets.filter(a => a.holder.kind === 'storage' && a.status === 'ok' && !reservedBy(a.id)), a => (a.type === old.type ? '0' : '1') + a.tag);
+  const cands = sortHu(db.assets.filter(a => a.holder.kind === 'storage' && a.officeId === old.officeId && a.status === 'ok' && !reservedBy(a.id)), a => (a.type === old.type ? '0' : '1') + a.tag);
   if (!cands.length){ alert('There is no free working asset in stock. Add one first, then do the swap.'); return; }
   const owner = holderPerson(old.holder), hasSame = cands.some(a => a.type === old.type);
   openDialog(`
@@ -530,11 +545,11 @@ function swapTable(list, opts = {}){
 // ---------- CSV export ----------
 function exportCSV(){
   const fsFields = db.fieldSets.flatMap(s => s.fields.filter(f => f.active).map(f => ({...f, setName:s.name})));
-  const rows = [['Asset ID', 'Asset Name', 'Legacy ID', 'Type', 'Model', 'Serial Number', 'Status', 'Location type', 'Location', 'On desk (Hybrid)', 'Person', 'Service',
+  const rows = [['Asset ID', 'Asset Name', 'Country', 'City / Office', 'Legacy ID', 'Type', 'Model', 'Serial Number', 'Status', 'Location type', 'Location', 'On desk (Hybrid)', 'Person', 'Service',
     'Arrived', 'Warranty end', 'Supplier', 'Order/invoice', 'Note', ...fsFields.map(f => `${f.setName}: ${f.name}`)]];
-  for (const a of sortHu(db.assets, a => a.tag)){
+  for (const a of sortHu(scopedAssets(), a => a.tag)){
     const who = holderPerson(a.holder);
-    rows.push([a.tag, assetName(a), a.legacyTag, typeLabel(a.type), modelName(a), a.serial, STATUS[a.status].label, LOC_LABEL[a.holder.kind].replace(/^\S+\s/, ''),
+    rows.push([a.tag, assetName(a), officeCountry(a.officeId).name, officeLabel(a.officeId), a.legacyTag, typeLabel(a.type), modelName(a), a.serial, STATUS[a.status].label, LOC_LABEL[a.holder.kind].replace(/^\S+\s/, ''),
       holderText(a.holder).replace(/^\S+\s/, ''), placementText(a).replace(/^\S+\s/, ''), who ? (person(who) || {}).name : '', serviceName(a.serviceId),
       a.arrived, a.warrantyUntil, a.supplier, a.orderNo, a.note, ...fsFields.map(f => fsFields && fieldsForType(a.type).some(x => x.id === f.id) ? fieldValueText(f, a.custom[f.id]).replace(/^–$/, '') : '')]);
   }
@@ -626,6 +641,8 @@ const IMPORT_FIELDS = [
   {key:'email',          label:'Person e-mail',       aliases:['személy e-mail', 'e-mail', 'email', 'user email']},
   {key:'service',        label:'Service',             aliases:['service', 'szolgáltatás', 'team', 'csapat', 'department']},
   {key:'location',       label:'Location',            aliases:['location', 'hely', 'helyszín', 'default location']},
+  {key:'country',        label:'Country',             aliases:['country', 'ország']},
+  {key:'office',         label:'City / Office',       aliases:['city / office', 'office', 'city', 'iroda', 'város']},
   {key:'arrived',        label:'Order arrived',       aliases:['order arrived', 'rendelés érkezése', 'érkezés', 'purchase date', 'beszerzés dátuma']},
   {key:'warrantyUntil',  label:'Warranty end',        aliases:['warranty end', 'garancia vége', 'warranty expires', 'warranty expiration', 'warranty_expires']},
   {key:'warrantyMonths', label:'Warranty (months)',   aliases:['warranty (months)', 'garancia (hónap)', 'warranty', 'warranty months']},
@@ -660,7 +677,7 @@ let imp = null;
 async function readImportFile(file){
   try {
     const t = await readTable(file, 'Assets');
-    imp = {fileName:file.name, headers:t.headers, rows:t.rows, map:guessColumns(t.headers, IMPORT_FIELDS), createPeople:true};
+    imp = {fileName:file.name, headers:t.headers, rows:t.rows, map:guessColumns(t.headers, IMPORT_FIELDS), createPeople:true, countryId:scope.countryId, officeId:scope.officeId};
     render();
   } catch(e){ alert('Could not read the file: ' + e.message); }
 }
@@ -704,16 +721,26 @@ function planImport(){
     const note = [s('note'), loc && !holder.usedLoc ? 'Location (import): ' + loc : '', holder.unknown ? 'Holder (import): ' + holder.unknown : '',
       s('service') && !svc ? 'Service (import, unknown): ' + s('service') : ''].filter(Boolean).join('\n');
     const dupSerial = s('serial') && db.assets.find(a => a.serial && norm(a.serial) === norm(s('serial')));
+    // the target is one concrete office; a row may only confirm it, never redirect the asset somewhere else
+    const errs = [], target = imp.officeId, rowOff = s('office'), rowC = s('country');
+    if (rowOff){ const o = db.offices.find(x => norm(x.name) === norm(rowOff) || norm(x.code || '') === norm(rowOff)); if (!o) errs.push(`unknown office: ${rowOff}`); else if (target && o.id !== target) errs.push(`row says ${o.name}, target is ${officeLabel(target)}`); }
+    if (rowC){ const c = db.countries.find(x => norm(x.name) === norm(rowC) || norm(x.code || '') === norm(rowC)); if (!c) errs.push(`unknown country: ${rowC}`); else if (target && c.id !== office(target).countryId) errs.push(`row says ${c.name}, target is ${officeCountry(target).name}`); }
+    const hOff = holder.h && holderOffice(holder.h);
+    if (hOff && target && hOff !== target) errs.push(`location belongs to ${officeLabel(hOff)}`);
+    if (holder.h && holder.h.kind === 'person' && target && (office(person(holder.h.id).officeId) || {}).countryId !== office(target).countryId) errs.push(`${person(holder.h.id).name} works in another country`);
     let action = 'new';
     if (!mdl && !s('serial') && !s('legacy')) action = 'empty';
     else if (dupSerial) action = 'dup';
-    return {legacy:s('legacy'), type, model:mdl || 'Unknown model', serial:s('serial'), status:parseStatus(s('status')) || 'ok', holder, serviceId:svc ? svc.id : null,
+    else if (errs.length) action = 'error';
+    return {errs, legacy:s('legacy'), type, model:mdl || 'Unknown model', serial:s('serial'), status:parseStatus(s('status')) || 'ok', holder, serviceId:svc ? svc.id : null,
       arrived, warrantyUntil, supplier:s('supplier'), orderNo:s('orderNo'), note, action, dupSerial};
   });
 }
 const planWhere = p => p.holder.newPerson ? `👤 ${p.holder.newPerson.name} (new person)` : holderText(p.holder.h) + (p.holder.unknown ? ` (unknown: ${p.holder.unknown})` : '');
-const PLAN_LABEL = {new:'<span class="pill ok">New</span>', dup:'<span class="pill warn">Skip – S/N exists</span>', empty:'<span class="pill">Empty row</span>'};
+const PLAN_LABEL = {new:'<span class="pill ok">New</span>', dup:'<span class="pill warn">Skip – S/N exists</span>', empty:'<span class="pill">Empty row</span>', error:'<span class="pill bad">Error – skip</span>'};
 function runImport(){
+  if (!imp.officeId){ alert('Choose a target Country and City / Office first.'); return; }
+  if (!canAt('assets.import', imp.officeId)){ alert('You do not have import access for this office.'); return; }
   const plan = planImport(), people = new Map(), types = new Map();
   let created = 0, skipped = 0;
   for (const p of plan){
@@ -722,7 +749,7 @@ function runImport(){
     if (p.holder.newPerson){
       const k = norm(p.holder.newPerson.name);
       let np = people.get(k);
-      if (!np){ np = {id:uid(), name:p.holder.newPerson.name, email:p.holder.newPerson.email, serviceId:p.serviceId, roleId:null, mode:db.modes[0].id, status:'Active', tickets:[], note:'Imported: ' + imp.fileName}; db.people.push(np); people.set(k, np); }
+      if (!np){ np = {id:uid(), name:p.holder.newPerson.name, email:p.holder.newPerson.email, serviceId:p.serviceId, roleId:null, mode:db.modes[0].id, status:'Active', tickets:[], officeId:imp.officeId, note:'Imported: ' + imp.fileName}; db.people.push(np); people.set(k, np); }
       h = {kind:'person', id:np.id};
     }
     let typeId = p.type.id;
@@ -733,7 +760,7 @@ function runImport(){
     }
     let m = db.models.find(x => x.typeId === typeId && norm(x.name) === norm(p.model));
     if (!m){ m = {id:uid(), typeId, name:p.model, imageId:null}; db.models.push(m); }
-    const a = {id:uid(), tag:nextAssetId(), name:'', legacyTag:p.legacy, type:typeId, modelId:m.id, serial:p.serial, status:p.status, holder:{kind:'storage'}, placement:null,
+    const a = {id:uid(), officeId:imp.officeId, tag:nextAssetId(), name:'', legacyTag:p.legacy, type:typeId, modelId:m.id, serial:p.serial, status:p.status, holder:{kind:'storage'}, placement:null,
       serviceId:p.serviceId, custom:{}, arrived:p.arrived, warrantyUntil:p.warrantyUntil, supplier:p.supplier, orderNo:p.orderNo, note:p.note, created:Date.now(), assignedAt:null};
     db.assets.push(a); log(a.id, `Imported (${imp.fileName}): ${a.tag} · ${modelName(a)}`, 'created'); created++;
     if (h.kind !== 'storage') setHolder(a, h);
@@ -755,15 +782,19 @@ function viewImport(){
         <label class="cb"><input type="checkbox" id="impPeople"${imp.createPeople ? ' checked' : ''}> Create new people for unknown names (otherwise the asset goes to stock and the name into the note)</label>
         <p class="muted" style="font-size:12px;margin:0">Asset IDs (HU……) are assigned automatically; the ID in the file is kept as Legacy ID.</p>
       </div>
-      <h2>3. Preview</h2>
-      <p>${PLAN_LABEL.new} ${cnt('new')} &nbsp; Skipped: ${cnt('dup') + cnt('empty')} &nbsp; · New people: ${newPeople}${newTypes.length ? ` · New types: ${newTypes.map(esc).join(', ')}` : ''}</p>
-      <div class="tbl-wrap"><table><thead><tr><th>Action</th><th>Legacy ID</th><th>Type</th><th>Model</th><th>Serial Number</th><th>Status</th><th>Goes to</th><th>Arrived</th><th>Warranty</th></tr></thead><tbody>
+      <h2>3. Target location</h2>
+      <div class="card row" id="impTarget"><label class="muted">Country *</label><select id="impCountry">${sortHu(db.countries.filter(c => accessibleOffices().some(o => o.countryId === c.id)), c => c.name).map(c => `<option value="${c.id}"${c.id === imp.countryId ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
+        <label class="muted">City / Office *</label><select id="impOffice"><option value="">– choose an office –</option>${sortHu(accessibleOffices().filter(o => o.countryId === imp.countryId), o => o.name).map(o => `<option value="${o.id}"${o.id === imp.officeId ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select>
+        ${imp.officeId ? '' : '<span class="pill warn">A concrete office is required</span>'}</div>
+      <h2>4. Preview</h2>
+      <p>${PLAN_LABEL.new} ${cnt('new')} &nbsp; ${cnt('error') ? `${PLAN_LABEL.error} ${cnt('error')} &nbsp; ` : ''}Skipped: ${cnt('dup') + cnt('empty')} &nbsp; · New people: ${newPeople}${newTypes.length ? ` · New types: ${newTypes.map(esc).join(', ')}` : ''}</p>
+      <div class="tbl-wrap"><table><thead><tr><th>Action</th><th>Legacy ID</th><th>Type</th><th>Model</th><th>Serial Number</th><th>Status</th><th>Goes to</th><th>Arrived</th><th>Warranty</th><th>Problem</th></tr></thead><tbody>
         ${plan.slice(0, 50).map(p => `<tr><td>${PLAN_LABEL[p.action]}</td><td class="tag">${esc(p.legacy) || '<span class="muted">–</span>'}</td>
           <td>${p.type.id ? typeIcon(p.type.id) + ' ' + esc(typeLabel(p.type.id)) : '📦 ' + esc(p.type.newType) + ' <span class="pill warn">new type</span>'}</td>
-          <td>${esc(p.model)}</td><td class="muted">${esc(p.serial)}</td><td>${statusPill(p.status)}</td><td>${esc(planWhere(p))}</td><td>${fmtDate(p.arrived)}</td><td>${fmtDate(p.warrantyUntil)}</td></tr>`).join('')}
+          <td>${esc(p.model)}</td><td class="muted">${esc(p.serial)}</td><td>${statusPill(p.status)}</td><td>${imp.officeId ? `<b>${esc(officeLabel(imp.officeId))}</b> · ` : ''}${esc(planWhere(p))}</td><td>${fmtDate(p.arrived)}</td><td>${fmtDate(p.warrantyUntil)}</td><td style="color:var(--danger)">${esc(p.errs.join('; '))}</td></tr>`).join('')}
       </tbody></table></div>
       ${plan.length > 50 ? `<p class="muted">… and ${plan.length - 50} more rows.</p>` : ''}
-      <div class="row" style="margin-top:14px"><button class="primary" id="impRun" onclick="runImport()"${cnt('new') ? '' : ' disabled'}>⬆ Import (${cnt('new')} assets)</button>
+      <div class="row" style="margin-top:14px"><button class="primary" id="impRun" onclick="runImport()"${cnt('new') && imp.officeId ? '' : ' disabled'}>⬆ Import (${cnt('new')} assets)</button>
         <button onclick="imp=null;render()">Cancel</button></div>`;
   }
   return `
@@ -790,6 +821,8 @@ function bindImport(){
   if (!imp) return;
   document.querySelectorAll('[data-map]').forEach(s => s.addEventListener('change', () => { imp.map[s.dataset.map] = +s.value; render(); }));
   $('#impPeople').addEventListener('change', e => { imp.createPeople = e.target.checked; render(); });
+  $('#impCountry').addEventListener('change', e => { imp.countryId = e.target.value; imp.officeId = ''; render(); });
+  $('#impOffice').addEventListener('change', e => { imp.officeId = e.target.value; render(); });
 }
 const TEMPLATE_HEADERS = ['Legacy ID / sticker', 'Type*', 'Model', 'Serial Number', 'Status', 'Holder / location', 'Service', 'Order arrived', 'Warranty end', 'Warranty (months)', 'Supplier', 'Order / invoice number', 'Note'];
 const TEMPLATE_EXAMPLES = [
