@@ -31,7 +31,7 @@ const TOUR = [
   {title:'Complete project', text:'After confirmation the assets are validated, checked out through the regular flow, and handover documents are created.',
     act:() => { completeProject(db.projects[0].id); const d = db.docs.find(x => x.projectId === db.projects[0].id); if (d) printDoc(d.id); }, ms:8000},
   {title:'Logs', text:'Filter by Created, Updated, Moved, Checkout, Returned, Project activity, User status and Settings.', go:'#/log?cat=project', hl:'.fchips', ms:6000},
-  {title:'Admin Panel', text:'Accounts are separate from People. Superadmin always has full access; Admin and Visitor are set per module and action, and the Permission Preview shows the result.', go:'#/admin/permissions', hl:'.perms', ms:7000},
+  {title:'Admin Panel', text:'Accounts are separate from People. Superadmin always has full access; Admin, Viewer and custom roles are set per module and action, and the Permission Preview shows the result.', go:'#/admin/permissions', hl:'.perms', ms:7000},
   {title:'Dashboard settings', text:'Choose which tiles appear, their order and size, the default filters and the Aged threshold. No code change needed.', go:'#/settings/dashboard', hl:'#dashCfg', ms:7000},
   {title:'Types & Models', text:'Asset Types, their Asset Name rules and models are managed here. New entries appear in every form and filter.', go:'#/settings/types', hl:'.tbl-wrap', ms:6000},
   {title:'People import', text:'Three values are enough: Full Name, Service, Work Mode. The preview shows wrong rows and unknown Services.',

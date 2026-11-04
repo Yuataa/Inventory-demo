@@ -2,12 +2,12 @@
 /* Settings: Services, Job Roles, Work Modes, Types & Models, Custom Field Sets, Dashboard, documents, data, log user */
 
 const SETTINGS_TABS = [['services', '🧩 Services'], ['roles', '👔 Job Roles'], ['modes', '🏠 Work Modes'], ['types', '🏷️ Types & Models'], ['fields', '🧾 Custom Field Sets'],
-  ['dashboard', '📊 Dashboard'], ['docs', '📄 Documents'], ['data', '💾 Data'], ['user', '👤 User']];
+  ['dashboard', '📊 Dashboard'], ['docs', '📄 Documents'], ['data', '💾 Data'], ['user', '👤 User'], ['patch', '📝 Patch Notes']];
 const SETTINGS_PERM = {services:'settings.services', roles:'settings.roles', modes:'settings.modes', types:'settings.types', fields:'settings.fields', dashboard:'settings.dashboard', docs:'documents.templates', data:'settings.data'};
 function viewSettings(tab, sub, params = new URLSearchParams()){
   const tabs = SETTINGS_TABS.filter(t => !SETTINGS_PERM[t[0]] || can(SETTINGS_PERM[t[0]]));
   tab = tabs.some(t => t[0] === tab) ? tab : tabs[0][0];
-  const body = {services:setServices, roles:setRoles, modes:setModes, types:() => setTypes(params), fields:() => sub ? setFieldSet(sub) : setFields(), dashboard:setDashboard, docs:setDocs, data:setData, user:setUser}[tab]();
+  const body = {services:setServices, roles:setRoles, modes:setModes, types:() => setTypes(params), fields:() => sub ? setFieldSet(sub) : setFields(), dashboard:setDashboard, docs:() => params.get('tpl') ? tplDesigner(params.get('tpl')) : setDocs(), data:setData, user:setUser, patch:setPatchNotes}[tab]();
   return `<h1>Settings</h1><div class="tabs">${tabs.map(([k, l]) => `<a href="#/settings/${k}" class="${k === tab ? 'on' : ''}">${l}</a>`).join('')}</div>${body}`;
 }
 
@@ -321,6 +321,7 @@ function setDocs(){
       <button onclick="if(confirm('Restore the default statements?')){Object.assign(db.settings,{outText:DEFAULT_SETTINGS.outText,inText:DEFAULT_SETTINGS.inText,swapText:DEFAULT_SETTINGS.swapText,docTitles:{...DEFAULT_SETTINGS.docTitles}});save();render();}">Restore default text</button></div>
     <p class="muted" style="font-size:12px">Saved changes apply to new documents only. Have the sample statements reviewed by HR / legal.</p></div>
     <div class="card"><b>Preview</b><iframe id="tplPrev" title="Document preview" style="width:100%;height:520px;border:1px solid var(--line);background:#fff;margin-top:8px"></iframe></div></div>
+    ${tplListHtml()}
     <h2>✍ Electronic signature</h2>
     <div class="card" style="max-width:640px"><div class="row"><label class="muted">Planned provider</label><select id="sEsign"><option value="">None</option>${Object.entries(ESIGN_PROVIDERS).map(([k, v]) => `<option value="${k}"${k === s.esignProvider ? ' selected' : ''}>${v}</option>`).join('')}</select><span class="pill warn">Not connected</span></div>
       <p class="muted" style="font-size:12px;margin-bottom:0">Preparation only. Both services need a server to hold the API keys, so nothing is sent from here. Until then use print, sign and “Upload signed”.</p></div>`;
@@ -368,9 +369,10 @@ function setData(){
 }
 async function exportJSON(){
   const files = {};
-  for (const d of db.docs) if (d.fileId){
-    const rec = await idb.get(d.fileId).catch(() => null);
-    if (rec) files[d.fileId] = {name:rec.name, type:rec.type, data:await blobToDataURL(rec.blob)};
+  // signed copies and the page images of the document templates (also the ones kept by finished documents)
+  for (const id of new Set([...db.docs.map(d => d.fileId).filter(Boolean), ...tplFileIds()])){
+    const rec = await idb.get(id).catch(() => null);
+    if (rec) files[id] = {name:rec.name, type:rec.type, data:await blobToDataURL(rec.blob)};
   }
   download(`tc-itam-backup-${stamp()}.json`, JSON.stringify({...db, files}, null, 2), 'application/json');
 }

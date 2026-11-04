@@ -81,38 +81,37 @@ function demandCounts(pr, l){
 }
 const demandText = pr => pr.demand.map(l => `${l.qty} × ${typeLabel(l.typeId)}`).join(', ');
 
+// linked filters for Projects (same engine as Assets)
+const projectServices = pr => [pr.targetServiceId, ...pr.participants.map(x => (person(x.personId) || {}).serviceId), ...pr.replacements.map(r => r.serviceId || (person(r.personId) || {}).serviceId)].filter(Boolean);
+const PROJECT_FACETS = {
+  activity:{label:'Activity Type', all:'All activities', order:Object.keys(ACTIVITIES), vals:pr => pr.activities, name:v => ACTIVITIES[v]},
+  office:{label:'Office', all:'All Offices', vals:pr => projectOffices(pr), name:officeLabel},
+  status:{label:'Status', all:'All statuses', order:['active', ...Object.keys(PROJECT_STATUS)], vals:pr => [pr.status, isActive(pr) ? 'active' : ''], name:v => v === 'active' ? 'Active (not closed)' : PROJECT_STATUS[v]},
+  owner:{label:'Project Owner', all:'All owners', vals:pr => [pr.owner || '__none'], name:v => v === '__none' ? '– no owner –' : v},
+  service:{label:'Service', all:'All Services', vals:pr => projectServices(pr), name:serviceName},
+};
+const projectBase = P => { const q = P.get('q') || '', from = P.get('from') || '', to = P.get('to') || '';
+  return scopedProjects().filter(pr => (!q || matchWords([pr.name, pr.ticket, pr.owner, pr.note, ...pr.participants.map(x => (person(x.personId) || {}).name)].join(' '), q)) && inRange(isoDay(pr.created), from, to)); };
+const PROJECT_SET = {base:projectBase, defs:PROJECT_FACETS};
 function viewProjects(params){
-  const q = params.get('q') || '', st = params.get('status') || '';
-  let list = scopedProjects();
-  if (st === 'active') list = list.filter(isActive); else if (st) list = list.filter(p => p.status === st);
-  if (q){ const n = norm(q); list = list.filter(pr => norm([pr.name, pr.ticket, pr.owner, pr.note, ...pr.participants.map(x => (person(x.personId) || {}).name)].join(' ')).includes(n)); }
-  list = sortHu(list, pr => (isActive(pr) ? '0' : '1') + (pr.pickupDate || '9999'));
+  const run = facetRun(projectBase(params), PROJECT_FACETS, params), list = sortHu(run.list, pr => (isActive(pr) ? '0' : '1') + (pr.pickupDate || '9999'));
   return `
     <div class="row"><h1>Projects</h1><span class="spacer"></span><button class="primary" onclick="projectForm()">+ New project</button></div>
     <div class="sub">Preparing equipment for people or for a demand without names yet. Assets stay reserved until the project is completed; nothing is checked out before that.</div>
-    <div class="row" style="margin-bottom:12px">
-      <input id="prq" placeholder="Search: name, ticket, owner, participant…" value="${esc(q)}" style="min-width:280px">
-      <select id="prst"><option value="">All statuses</option><option value="active"${st === 'active' ? ' selected' : ''}>Active (not closed)</option>
-        ${Object.entries(PROJECT_STATUS).map(([k, v]) => `<option value="${k}"${k === st ? ' selected' : ''}>${v}</option>`).join('')}</select>
-    </div>
-    ${list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Project name</th><th>Offices</th><th>Activities</th><th>Participants / demand</th><th>Pickup / deadline</th><th>Owner</th><th>Ticket</th><th>Status</th><th>Preparation</th><th>Note</th></tr></thead><tbody>${list.map(pr => {
+    ${filterBar({route:'#/projects', facets:PROJECT_FACETS, params, counts:run.counts, placeholder:'Search: name, ticket, owner, participant…', dates:'Created', total:scopedProjects().length, n:list.length})}
+    ${list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Project name</th><th>Offices</th><th>Activities</th><th>Participants / demand</th><th>Pickup / deadline</th><th>Owner</th><th>Ticket</th><th>Status</th><th>Preparation</th><th>Created</th><th>Note</th><th class="actcol">Actions</th></tr></thead><tbody>${list.map(pr => {
       const pct = projectProgress(pr);
       return `<tr><td><a href="#/project/${pr.id}"><b>${esc(pr.name)}</b></a></td><td class="muted">${esc(projectOffices(pr).map(officeLabel).join(', '))}</td><td>${actPills(pr)}</td>
         <td>${pr.participants.map(x => esc((person(x.personId) || {}).name || '?')).join(', ') || (pr.demand.length ? `<span class="muted">${esc(demandText(pr))}</span>` : pr.shipments.length ? `<span class="muted">${esc(pr.shipments.map(shipRoute).join(', '))}</span>` : '<span class="muted">–</span>')}</td>
         <td style="white-space:nowrap">${fmtDate(pr.pickupDate)}</td><td>${esc(pr.owner) || '<span class="muted">–</span>'}</td>
         <td class="tag">${esc(pr.ticket) || '<span class="muted">–</span>'}</td><td>${projectStatusPill(pr.status)}</td>
         <td><div class="progress" title="${pct}%"><i style="width:${pct}%"></i></div><small class="muted">${pct}%</small></td>
-        <td class="muted">${esc(pr.note)}</td></tr>`;
+        <td class="muted" style="white-space:nowrap" data-v="${pr.created || 0}">${isoDay(pr.created) || '–'}</td>
+        <td class="muted">${esc(pr.note)}</td>
+        <td class="rowact">${iconBtn('view', 'View ' + pr.name, `location.hash='#/project/${pr.id}'`)}${isActive(pr) ? iconBtn('edit', 'Edit ' + pr.name, `projectForm(project('${pr.id}'))`) : ''}${pr.shipments.some(s => s.status === 'Sent') ? '' : iconBtn('del', 'Delete ' + pr.name, `deleteProject('${pr.id}')`, 'danger')}</td></tr>`;
     }).join('')}</tbody></table></div>` : '<div class="empty">No projects match the filter.</div>'}`;
 }
-function bindProjects(){
-  const upd = () => {
-    const p = new URLSearchParams(); if ($('#prq').value) p.set('q', $('#prq').value); if ($('#prst').value) p.set('status', $('#prst').value);
-    history.replaceState(null, '', '#/projects' + (p.toString() ? '?' + p : ''));
-    const pos = $('#prq').selectionStart; render(); $('#prq').focus(); $('#prq').setSelectionRange(pos, pos);
-  };
-  $('#prq').addEventListener('input', upd); $('#prst').addEventListener('change', upd);
-}
+const bindProjects = () => bindFilterBar('#/projects', PROJECT_SET);
 function projectForm(pr){
   const isNew = !pr;
   pr = pr || {name:'', owner:(currentPerson() || {}).name || currentUser(), pickupDate:'', ticket:'', note:'', status:'planning', targetServiceId:null, targetRoomId:null, accessories:'', activities:[]};
@@ -528,7 +527,8 @@ function deleteProject(id){
   if (pr.shipments.some(s => s.status === 'Sent')){ alert('A shipment of this project is on its way. Record the receipt or cancel the sending first.'); return; }
   if (!confirm(`Delete project “${pr.name}”?${isActive(pr) ? '\nReserved assets are released, nothing is checked out.' : '\nChecked-out assets and documents stay.'}`)) return;
   plog(pr.id, 'Project deleted: ' + pr.name);
-  db.projects = db.projects.filter(x => x.id !== id); save(); location.hash = '#/projects';
+  db.projects = db.projects.filter(x => x.id !== id); save();
+  if (location.hash.startsWith('#/project/')) location.hash = '#/projects'; else render();
 }
 // everything that would stop a clean completion; only the selected activities are looked at
 function projectProblems(pr){

@@ -91,7 +91,7 @@ function routeGate(r, id){
 
 // which permission each action needs; a function decides from the action's arguments
 const GUARDS = {
-  assetForm:a => a ? 'assets.edit' : 'assets.create', deleteAsset:'assets.delete', bulkStatus:'assets.edit',
+  assetForm:a => a ? 'assets.edit' : 'assets.create', deleteAsset:'assets.delete', duplicateAsset:'assets.create', bulkStatus:'assets.edit',
   bulkMove:hs => String(hs || '').startsWith('person') ? 'assets.assign' : 'assets.move', returnToWarehouse:'assets.move', toStorage:'assets.move', returnAll:'assets.move',
   assignAssetDialog:'assets.assign', swapDialog:'assets.assign', exportCSV:'assets.export', runImport:'assets.import',
   personForm:p => p ? 'people.edit' : 'people.create', deletePerson:'people.delete', ticketDialog:'people.status', removeTicket:'people.status', markReturn:'people.status', runPeopleImport:'people.import',
@@ -99,7 +99,8 @@ const GUARDS = {
   projectForm:p => p ? 'projects.edit' : 'projects.create', deleteProject:'projects.delete', completeProject:'projects.complete', addParticipantDialog:'projects.edit', demandDialog:'projects.edit',
   replacementDialog:'projects.edit', setRepState:'projects.edit', shipmentDialog:'projects.shipCreate', removeShipment:'projects.shipCreate',
   shipAction:(p, s, act) => act === 'receive' ? 'projects.shipReceive' : 'projects.shipSend',
-  docDialog:'documents.create', uploadSigned:'documents.upload', deleteDoc:'documents.delete', saveDocSettings:'documents.templates', labelDialog:'labels.print',
+  docDialog:'documents.create', uploadSigned:'documents.upload', deleteDoc:'documents.delete', saveDocSettings:'documents.templates',
+  newDocTemplate:'documents.templates', dupDocTemplate:'documents.templates', deleteDocTemplate:'documents.templates', bindTplDesigner:'documents.templates', labelDialog:'labels.print',
   serviceForm:'settings.services', deleteService:'settings.services', roleForm:'settings.roles', deleteRole:'settings.roles', modeForm:'settings.modes', deleteMode:'settings.modes',
   typeForm:'settings.types', deleteType:'settings.types', modelForm:'settings.types', deleteModel:'settings.types',
   fieldSetForm:'settings.fields', deleteFieldSet:'settings.fields', fieldForm:'settings.fields', moveField:'settings.fields', toggleField:'settings.fields', resetDashboard:'settings.dashboard',
@@ -113,7 +114,7 @@ const rOff = x => { const r = typeof x === 'string' ? room(x) : x; return r ? [r
 const selOff = () => [...selected].map(asset).filter(Boolean).map(a => a.officeId);
 const prOff = x => { const p = typeof x === 'string' ? project(x) : x; return p ? projectOffices(p) : []; };
 const GUARD_OFF = {
-  assetForm:aOff, deleteAsset:aOff, toStorage:aOff, returnToWarehouse:aOff, swapDialog:aOff, bulkMove:selOff, bulkStatus:selOff,
+  assetForm:aOff, deleteAsset:aOff, duplicateAsset:aOff, toStorage:aOff, returnToWarehouse:aOff, swapDialog:aOff, bulkMove:selOff, bulkStatus:selOff,
   personForm:pOff, deletePerson:pOff, ticketDialog:pOff, removeTicket:pOff, roomForm:rOff, fpStart:rOff, deleteRoom:rOff,
   labelDialog:ids => [].concat(ids || []).map(asset).filter(Boolean).map(a => a.officeId),
   shipAction:(p, sid, act) => { const s = findShipment(sid); return s ? [act === 'receive' ? s.toOfficeId : s.fromOfficeId].filter(Boolean) : []; },
@@ -149,6 +150,8 @@ function applyPerms(){
 const NAV_PERM = {'':'overview', assets:'assets', people:'people', rooms:'floorplan', projects:'projects', docs:'documents', log:'logs', settings:'settings', admin:'admin'};
 function applyNav(){
   document.querySelectorAll('#nav a').forEach(a => { a.hidden = !can(NAV_PERM[a.dataset.r] + '.menu'); });
+  // a group heading goes when every item under it is hidden
+  document.querySelectorAll('#nav .ngrp').forEach(g => { let n = g.nextElementSibling, any = false; while (n && n.tagName === 'A'){ any ||= !n.hidden; n = n.nextElementSibling; } g.hidden = !any; });
   const t = document.querySelector('[onclick="startTour()"]'); if (t) t.hidden = currentAccount().role === 'Viewer';
 }
 function routePerm(r, sub){

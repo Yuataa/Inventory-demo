@@ -12,7 +12,9 @@ function curOffice(params){
 function viewRooms(params){
   const o = curOffice(params), rooms = sortHu(officeRooms(o.id), r => r.name), pool = sortHu(sitePool(o.id), a => a.tag);
   return `
-    <div class="row"><h1>Floorplan</h1><span class="spacer"></span><button class="primary" onclick="roomForm()">+ New room</button></div>
+    <div class="row"><h1>Floorplan</h1><span class="spacer"></span>
+      ${rooms.length ? `<button onclick="printFloorplan('${o.id}')" title="Every room of this office">🖨 Print</button><button onclick="exportFloorplanXlsx('${o.id}')" title="Every room of this office">⬇ Export to Excel</button>` : ''}
+      <button class="primary" onclick="roomForm()">+ New room</button></div>
     <div class="officebar"><label class="muted">Office</label><select id="fpOffice">${sortHu(accessibleOffices().filter(x => x.countryId === o.countryId), x => x.name).map(x => `<option value="${x.id}"${x.id === o.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
       <button class="sm" onclick="countryForm()">+ New country</button><button class="sm" onclick="countryForm(country('${o.countryId}'))">✎ Edit country</button><button class="sm danger" onclick="deleteCountry('${o.countryId}')">Delete country</button>
       <button class="sm" onclick="officeForm()">+ New office</button><button class="sm" onclick="officeForm(office('${o.id}'))">✎ Edit office</button><button class="sm danger" onclick="deleteOffice('${o.id}')">Delete office</button>
@@ -115,7 +117,8 @@ function viewRoom(id, selId){
   return `
     <div class="row"><a href="#/rooms?office=${r.officeId}">← ${esc((office(r.officeId) || {}).name || 'Floorplan')}</a></div>
     <div class="row" style="margin-top:8px"><h1>${(ROOM_KINDS[r.kind] || '🏢').split(' ')[0]} ${esc(r.name)}</h1><span class="spacer"></span>
-      ${ed ? '' : `<button class="primary" onclick="fpStart('${r.id}')">✎ Edit floorplan</button>
+      ${ed ? '' : `<button onclick="printFloorplan('${r.officeId}','${r.id}')">🖨 Print</button><button onclick="exportFloorplanXlsx('${r.officeId}','${r.id}')">⬇ Export to Excel</button>
+        <button class="primary" onclick="fpStart('${r.id}')">✎ Edit floorplan</button>
         <button onclick="roomForm(room('${r.id}'))">⚙ Room details</button>
         <button class="danger" onclick="deleteRoom('${r.id}')">Delete</button>`}</div>
     <div class="sub">${ROOM_KINDS[r.kind] || ''} · ${esc(r.floor)} · 🧩 ${r.serviceIds.map(serviceName).filter(Boolean).map(esc).join(', ') || 'no Service'}${r.savedAt ? ` · last saved: ${fmtTime(r.savedAt)}` : ''}</div>
@@ -367,6 +370,98 @@ function deleteObj(id){
     db.items = db.items.filter(x => x.id !== id);
   }
   save(); location.hash = '#/room/' + o.roomId;
+}
+// ---------- print and Excel export: the same rows feed the printout, the overview sheet and the drawn plan ----------
+const fpRooms = (oid, rid) => rid ? [room(rid)].filter(Boolean) : sortHu(officeRooms(oid), r => r.name);
+const deskPersonText = k => k.personId && person(k.personId) ? person(k.personId).name : k.shared ? k.sharedNote || 'Shared / shift' : '';
+// one row per asset on a desk or rack; a desk without assets still gets its own row; room pool assets are listed too
+function floorRows(rooms){
+  const out = [];
+  for (const r of rooms){
+    const base = [officeLabel(r.officeId), r.floor || '', r.name];
+    for (const k of sortHu(db.desks.filter(x => x.roomId === r.id), x => x.label)){
+      const as = sortHu(deskAssets(k.id), a => a.type + a.tag), desk = `${k.label}${k.kind === 'rack' ? ' (rack)' : ''}${k.port ? ' · port ' + k.port : ''}`;
+      if (!as.length) out.push([...base, desk, deskPersonText(k), serviceName((person(k.personId) || {}).serviceId), '', '', '', '', '', '']);
+      for (const a of as){
+        const p = a.placement ? person(a.holder.id) : person(k.personId);
+        out.push([...base, desk, a.placement ? `${p ? p.name : '?'} (Hybrid)` : deskPersonText(k), serviceName(a.serviceId || (p || {}).serviceId), a.tag, assetName(a), typeLabel(a.type), modelName(a), a.serial || '', STATUS[a.status].label]);
+      }
+    }
+    for (const a of sortHu(officePool(r.id), a => a.tag)) out.push([...base, '(room pool, not on a desk)', '', serviceName(a.serviceId), a.tag, assetName(a), typeLabel(a.type), modelName(a), a.serial || '', STATUS[a.status].label]);
+  }
+  return out;
+}
+const FLOOR_HEAD = ['Office', 'Floor', 'Room', 'Desk ID / Desk Name', 'Person', 'Service / Department', 'Asset ID', 'Asset Name', 'Asset Type', 'Model', 'Serial Number', 'Status'];
+function printFloorplan(oid, rid){
+  const rooms = fpRooms(oid, rid);
+  if (!rooms.length){ toast('This office has no rooms.'); return; }
+  const page = r => {
+    const s = Math.min(1, 960 / r.w), objs = roomObjs(r.id);
+    const box = o => {
+      if (o.kind === 'door') return `<div class="o door" style="left:${o.x}px;top:${o.y}px;width:${o.w}px;height:${o.h}px"></div>`;
+      const as = sortHu(deskAssets(o.id), a => a.type + a.tag), who = deskPersonText(o);
+      return `<div class="o ${o.kind}${o.personId ? ' own' : o.shared ? ' sh' : ''}" style="left:${o.x}px;top:${o.y}px;width:${o.w}px;min-height:${o.h}px"><b>${esc(o.label)}</b>${o.port ? ` <small>🔌${esc(o.port)}</small>` : ''}${who ? `<div>${esc(who)}</div>` : ''}<div class="t">${as.map(a => esc(a.tag)).join(' ')}</div></div>`;
+    };
+    const rows = floorRows([r]);
+    return `<section class="pg"><h1>${esc(officeLabel(r.officeId))} › ${esc(r.name)}</h1><p class="meta">${esc(r.floor || '')}${r.floor ? ' · ' : ''}printed ${fmtTime(Date.now())}</p>
+      <div class="mapw" style="width:${r.w * s}px;height:${r.h * s}px"><div class="map" style="width:${r.w}px;height:${r.h}px;transform:scale(${s})">${objs.map(box).join('')}</div></div>
+      <table><thead><tr>${FLOOR_HEAD.slice(3).map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(x => `<tr>${x.slice(3).map(v => `<td>${esc(v)}</td>`).join('')}</tr>`).join('') || '<tr><td colspan="9">No desks.</td></tr>'}</tbody></table></section>`;
+  };
+  openPrintWindow(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Floorplan – ${esc(officeLabel(oid))}</title><style>
+    @page{size:A4 landscape;margin:10mm} body{font:11px/1.35 Arial,sans-serif;color:#111;margin:0;background:#e9ebee}
+    .bar{position:sticky;top:0;background:#1d2330;color:#fff;padding:10px 16px;display:flex;gap:14px;align-items:center;font:14px system-ui}
+    .bar button{font:inherit;padding:7px 16px;border-radius:6px;border:0;background:#2f6fed;color:#fff;cursor:pointer;font-weight:600}
+    .pg{background:#fff;margin:16px auto;padding:12mm;max-width:277mm;box-sizing:border-box;page-break-after:always} .pg:last-child{page-break-after:auto}
+    h1{font-size:16px;margin:0} .meta{color:#555;margin:2px 0 10px}
+    .mapw{position:relative;margin-bottom:12px} .map{position:absolute;top:0;left:0;transform-origin:0 0;border:3px solid #444;background:#fafafa}
+    .o{position:absolute;box-sizing:border-box;border:2px solid #b09460;background:#f3ead9;padding:3px 5px;overflow:hidden;font-size:11px}
+    .o.own{background:#e6f4ea;border-color:#5b8f6b} .o.sh{background:#e4ecfb;border-color:#6a8fd0} .o.rack{background:#3b3f46;border-color:#1f2226;color:#fff}
+    .o.door{background:repeating-linear-gradient(45deg,#9a7442 0 4px,transparent 4px 8px);border:2px solid #9a7442;padding:0}
+    .o .t{font-family:Consolas,monospace;font-size:10px}
+    table{border-collapse:collapse;width:100%} th,td{border:1px solid #999;padding:3px 5px;text-align:left;vertical-align:top} th{background:#eee}
+    @media print{.bar{display:none} body{background:#fff} .pg{margin:0;padding:0;max-width:none}}
+  </style></head><body><div class="bar"><button onclick="print()">🖨 Print</button><span>${rooms.length} room(s). Landscape A4.</span></div>${rooms.map(page).join('')}</body></html>`);
+}
+// sheet 1 draws each room on a grid (one cell = 20 px of the plan), sheet 2 is an editable table with filters
+function floorplanBook(oid, rid){
+  const rooms = fpRooms(oid, rid), sh = xlSheet('Floorplan'), G = 20;
+  sh.landscape = true;
+  sh.set(0, 0, `Floorplan – ${officeLabel(oid)}${rid && rooms[0] ? ' › ' + rooms[0].name : ''}`, XL_STYLE.title);
+  const legend = [['Desk with owner', XL_STYLE.owner], ['Shared / shift desk', XL_STYLE.shared], ['Free desk', XL_STYLE.free], ['Rack', XL_STYLE.rack], ['Door', XL_STYLE.door]];
+  let c = 0; for (const [l, s] of legend){ for (let i = 0; i < 6; i++) sh.set(1, c + i, i ? '' : l, s); sh.merges.push([1, c, 1, c + 5]); c += 7; }
+  sh.set(2, 0, 'Details of every desk are on the “Desk & Asset Overview” sheet.', XL_STYLE.note);
+  let top = 4, maxC = 34;
+  for (const r of rooms){
+    const cols = Math.ceil(r.w / G), rows = Math.ceil(r.h / G);
+    sh.set(top, 0, `${r.name}${r.floor ? ' · ' + r.floor : ''}`, XL_STYLE.title); sh.rows[top] = 21;
+    const r0 = top + 1, used = new Set();
+    // the walls, then the floor
+    for (let y = 0; y <= rows + 1; y++) for (let x = 0; x <= cols + 1; x++) sh.set(r0 + y, x, '', y === 0 || x === 0 || y === rows + 1 || x === cols + 1 ? XL_STYLE.wall : XL_STYLE.floor);
+    for (const o of sortHu(roomObjs(r.id), o => o.kind === 'door' ? 1 : 0)){
+      const x0 = Math.min(cols, Math.round(o.x / G) + 1), y0 = Math.min(rows, Math.round(o.y / G) + 1);
+      const x1 = Math.max(x0, Math.min(cols, Math.round((o.x + o.w) / G))), y1 = Math.max(y0, Math.min(rows, Math.round((o.y + o.h) / G)));
+      const style = o.kind === 'door' ? XL_STYLE.door : o.kind === 'rack' ? XL_STYLE.rack : o.personId ? XL_STYLE.owner : o.shared ? XL_STYLE.shared : XL_STYLE.free;
+      const cells = []; for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) cells.push([y, x]);
+      const free = cells.filter(([y, x]) => !used.has(y + ',' + x));
+      if (!free.length) continue;
+      const as = o.kind === 'door' ? [] : sortHu(deskAssets(o.id), a => a.type + a.tag);
+      const text = o.kind === 'door' ? '' : [o.label + (o.port ? ` · ${o.port}` : ''), deskPersonText(o), as.map(a => a.tag).join(', ')].filter(Boolean).join('\n');
+      free.forEach(([y, x], i) => { used.add(y + ',' + x); sh.set(r0 + y, x, i ? '' : text, style); });
+      // merged only when nothing else overlaps, so the sheet always opens cleanly
+      if (free.length === cells.length && cells.length > 1) sh.merges.push([r0 + y0, x0, r0 + y1, x1]);
+    }
+    for (let y = 0; y <= rows + 1; y++) sh.rows[r0 + y] = 15;
+    maxC = Math.max(maxC, cols + 2);
+    top = r0 + rows + 4;
+  }
+  sh.cols = Array.from({length:maxC}, () => 2.9);
+  return {sheets:[sh, xlTable('Desk & Asset Overview', FLOOR_HEAD, floorRows(rooms), [18, 12, 22, 22, 22, 20, 11, 24, 14, 22, 16, 11])], rooms};
+}
+function exportFloorplanXlsx(oid, rid){
+  const {sheets, rooms} = floorplanBook(oid, rid);
+  if (!rooms.length){ toast('This office has no rooms.'); return; }
+  download(`floorplan-${(rid ? rooms[0].name : officeLabel(oid)).replace(/[^\w.-]+/g, '-')}-${stamp()}.xlsx`, xlsxBlob(sheets));
+  toast(`Excel file with ${rooms.length} room(s) downloaded.`);
 }
 function deleteRoom(id){
   const r = room(id), ks = db.desks.filter(k => k.roomId === id);

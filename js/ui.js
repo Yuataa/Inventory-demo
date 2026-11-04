@@ -160,6 +160,81 @@ document.addEventListener('keydown', e => {
 }, true);
 window.addEventListener('resize', () => closeCombo());
 document.addEventListener('scroll', e => { if (combo && !combo.el.contains(e.target)) closeCombo(); }, true);
+// ---------- linked filters, one engine for every list ----------
+// The options of a filter come from the items that pass all the OTHER active filters, so any two filters narrow each other
+// in both directions (Type limits the people, a person limits the types). A facet: {label, all, vals(item) → values, name(value)}.
+function facetRun(items, facets, params){
+  const keys = Object.keys(facets), active = keys.filter(k => params.get(k));
+  const test = (k, x) => { const f = facets[k], v = params.get(k); return f.test ? f.test(x, v) : f.vals(x).includes(v); };
+  const counts = Object.fromEntries(keys.map(k => [k, new Map()])), list = [];
+  for (const x of items){
+    let fails = 0, failKey = null;
+    for (const k of active) if (!test(k, x)){ fails++; failKey = k; if (fails > 1) break; }
+    if (fails > 1) continue;
+    if (!fails) list.push(x);
+    // an item counts for a filter when it passes every other filter
+    for (const k of keys) if (!fails || failKey === k) for (const v of new Set(facets[k].vals(x))) if (v !== '' && v != null) counts[k].set(v, (counts[k].get(v) || 0) + 1);
+  }
+  return {list, counts};
+}
+const facetLabel = (f, v) => (f.name ? f.name(v) : v) || v;
+// the values that no longer match anything because of the other filters
+const facetStale = (facets, params, counts) => Object.keys(facets).filter(k => params.get(k) && !counts[k].get(params.get(k)));
+function facetSelect(k, f, counts, cur){
+  const m = counts[k], order = f.order ? f.order.filter(v => m.has(v)) : sortHu([...m.keys()], v => facetLabel(f, v));
+  const stale = cur && !m.has(cur);
+  return `<select data-facet="${k}" title="${esc(f.label)}" aria-label="${esc(f.label)}"${stale ? ' class="stale"' : ''}><option value="">${esc(f.all)}</option>
+    ${stale ? `<option value="${esc(cur)}" selected>${esc(facetLabel(f, cur))} (no match)</option>` : ''}${order.map(v => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(facetLabel(f, v))} (${m.get(v)})</option>`).join('')}</select>`;
+}
+// reads the filter controls into the address; filters that a change made impossible are removed and named
+function facetUpdate(route, facets, changed, extra = {}){
+  const p = new URLSearchParams(location.hash.split('?')[1] || '');
+  document.querySelectorAll('#view [data-facet]').forEach(s => { if (s.value) p.set(s.dataset.facet, s.value); else p.delete(s.dataset.facet); });
+  for (const [k, v] of Object.entries(extra)) if (v) p.set(k, v); else p.delete(k);
+  // only a filter choice clears others; typing in the search box never removes filters, the chips show what no longer matches
+  if (facets.base && facets.defs[changed]){
+    const {counts} = facetRun(facets.base(p), facets.defs, p), drop = facetStale(facets.defs, p, counts).filter(k => k !== changed);
+    drop.forEach(k => p.delete(k));
+    if (drop.length) toast(`Cleared: ${drop.map(k => facets.defs[k].label).join(', ')} – no match with the other filters`);
+  }
+  history.replaceState(null, '', route + (p.toString() ? '?' + p : ''));
+}
+
+// the same filter bar for every list: search, linked dropdowns, optional date range, chips, result count
+const inRange = (d, from, to) => { if (!from && !to) return true; if (!d) return false; return (!from || d >= from) && (!to || d <= to); };
+const isoDay = ts => ts ? (typeof ts === 'number' ? isoLocalDay(new Date(ts)) : String(ts).slice(0, 10)) : '';
+const isoLocalDay = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function filterBar(o){
+  const {route, facets, params, counts, shown = Object.keys(facets), placeholder, dates, total, n} = o, v = k => params.get(k) || '';
+  return `<div class="row filters" style="margin-bottom:8px">
+      <input id="fbq" type="search" placeholder="${esc(placeholder)}" value="${esc(v('q'))}" aria-label="Search" style="min-width:240px;flex:1">
+      ${shown.map(k => facetSelect(k, facets[k], counts, v(k))).join('')}
+      ${dates ? `<label class="muted">${esc(dates)} from <input type="date" id="fbfrom" value="${esc(v('from'))}" aria-label="Date from"></label><label class="muted">to <input type="date" id="fbto" value="${esc(v('to'))}" aria-label="Date to"></label>` : ''}
+    </div>${activeFilterChips(params, route, facets, shown, counts)}
+    <div class="sub" style="margin-bottom:10px"><b>${n}</b> of ${total} shown${[...params.keys()].length ? ` · <a href="${route}">Clear all filters</a>` : ''}</div>`;
+}
+function bindFilterBar(route, set){
+  const upd = changed => {
+    const val = s => $(s) ? $(s).value : '';
+    facetUpdate(route, set, changed, {q:val('#fbq'), from:val('#fbfrom'), to:val('#fbto')});
+    const typing = document.activeElement && document.activeElement.id === 'fbq', pos = typing ? $('#fbq').selectionStart : 0;
+    render(); if (typing){ $('#fbq').focus(); $('#fbq').setSelectionRange(pos, pos); }
+  };
+  if ($('#fbq')) $('#fbq').addEventListener('input', () => upd('q'));
+  for (const s of ['#fbfrom', '#fbto']) if ($(s)) $(s).addEventListener('change', () => upd(''));
+  document.querySelectorAll('#view [data-facet]').forEach(s => s.addEventListener('change', () => upd(s.dataset.facet)));
+}
+
+// ---------- icons for the row actions, the same in every table ----------
+const ICON = {
+  edit:'<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/>',
+  del:'<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
+  dup:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
+  move:'<path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/>',
+  view:'<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+};
+const iconBtn = (kind, title, onclick, cls = '') => `<button type="button" class="ib ${cls}" onclick="${onclick}" title="${esc(title)}" aria-label="${esc(title)}"><svg viewBox="0 0 24 24" aria-hidden="true">${ICON[kind]}</svg></button>`;
+
 // every place an asset can go: storage, people, office pools, desks
 // only the people and places of one country: moving further away is a shipment
 function holderOptions(current, o = {}){
@@ -222,7 +297,8 @@ function applySorts(){
       th.querySelector('.sa')?.remove();
       if (p >= 0) th.insertAdjacentHTML('beforeend', `<span class="sa">${list[p].dir > 0 ? '▲' : '▼'}${list.length > 1 ? p + 1 : ''}</span>`);
     });
-    if (!list.length) return;
+    // a paged table is sorted on all its data before paging, so only the arrows are shown here
+    if (!list.length || t.dataset.datasort) return;
     const rows = [...t.tBodies[0].rows];
     if (rows.length < 2) return;
     rows.map((r, n) => [r, n]).sort(([a, x], [b, y]) => {
@@ -232,13 +308,44 @@ function applySorts(){
   });
 }
 document.addEventListener('click', e => {
-  const th = e.target.closest('th[data-sk]'); if (!th || e.target.closest('input,button,a')) return;
+  const th = e.target.closest('th[data-sk]'); if (!th || e.target.closest('input,button,a,.colgrip') || colDrag.justDone) return;
   const key = th.dataset.sk, i = +th.dataset.si, list = sortState[key] ||= [], cur = list.find(s => s.i === i);
   if (e.shiftKey){ if (!cur) list.push({i, dir:1}); else if (cur.dir > 0) cur.dir = -1; else list.splice(list.indexOf(cur), 1); }
   else if (!cur || list.length > 1) sortState[key] = [{i, dir:cur ? -cur.dir : 1}];
   else if (cur.dir > 0) cur.dir = -1;
   else sortState[key] = [];
   render();
+});
+
+// ---------- column widths: drag the edge of a header, like in Excel; double-click resets ----------
+// On the first drag every column is measured and the table switches to fixed widths, so nothing else jumps.
+const COL_MIN = 60, COL_MAX = 600, colDrag = {justDone:false};
+const colWidthsOf = t => Object.fromEntries([...t.tHead.rows[0].cells].filter(th => th.dataset.col).map(th => [th.dataset.col, th.offsetWidth]));
+function fixColumns(t){
+  if (t.style.tableLayout === 'fixed') return;
+  const ths = [...t.tHead.rows[0].cells], w = ths.map(th => th.offsetWidth);
+  ths.forEach((th, i) => { th.style.width = w[i] + 'px'; });
+  t.style.width = w.reduce((s, x) => s + x, 0) + 'px'; t.style.tableLayout = 'fixed';
+}
+document.addEventListener('pointerdown', e => {
+  const g = e.target.closest('.colgrip'); if (!g || e.button !== 0) return;
+  e.preventDefault(); e.stopPropagation();
+  const th = g.closest('th'), t = th.closest('table');
+  fixColumns(t);
+  const x0 = e.clientX, w0 = th.offsetWidth, tw0 = t.offsetWidth;
+  try { g.setPointerCapture(e.pointerId); } catch(err) {}
+  t.classList.add('resizing');
+  const mv = ev => { const w = Math.max(COL_MIN, Math.min(COL_MAX, w0 + ev.clientX - x0)); th.style.width = w + 'px'; t.style.width = (tw0 + w - w0) + 'px'; };
+  const up = () => {
+    g.removeEventListener('pointermove', mv); g.removeEventListener('pointerup', up); t.classList.remove('resizing');
+    colDrag.justDone = true; setTimeout(() => { colDrag.justDone = false; }, 0);
+    const key = t.dataset.widths; if (key){ myPrefs()[key] = colWidthsOf(t); save(); }
+  };
+  g.addEventListener('pointermove', mv); g.addEventListener('pointerup', up);
+});
+document.addEventListener('dblclick', e => {
+  const g = e.target.closest('.colgrip'); if (!g) return;
+  const key = g.closest('table').dataset.widths; if (key){ delete myPrefs()[key]; save(); render(); toast('Column widths reset.'); }
 });
 
 // ---------- bulk selection (asset list and person page) ----------
@@ -274,8 +381,8 @@ document.addEventListener('change', e => {
 const clipCell = t => t ? `<td title="${esc(t)}"><div class="clip">${esc(t)}</div></td>` : '<td><span class="muted">–</span></td>';
 const ASSET_COLS = {
   tag:{label:'Asset ID', cell:a => { const res = reservedBy(a.id), ret = openReturnOf(a.id);
-    return `<td>${aidLink(a)}${copyBtn(a.tag)}${res ? `<br><a class="pill acc" href="#/project/${res.project.id}" title="Reserved for a project">📋 ${esc(res.project.name)}</a>` : ''}${ret ? `<br><span class="pill ${returnCls(ret)}" title="${esc(returnDue(ret) ? 'Due ' + returnDue(ret) : 'No deadline set')}">↩ Awaiting Return</span>` : ''}</td>`; }},
-  name:{label:'Asset Name', cell:a => `<td><a href="#/asset/${a.id}">${esc(assetName(a))}</a></td>`},
+    return `<td>${aidLink(a)}${res ? `<br><a class="pill acc" href="#/project/${res.project.id}" title="Reserved for a project">📋 ${esc(res.project.name)}</a>` : ''}${ret ? `<br><span class="pill ${returnCls(ret)}" title="${esc(returnDue(ret) ? 'Due ' + returnDue(ret) : 'No deadline set')}">↩ Awaiting Return</span>` : ''}</td>`; }},
+  name:{label:'Asset Name', cell:a => `<td><a href="#/asset/${a.id}">${esc(assetName(a))}</a>${assetName(a) ? copyBtn(assetName(a)) : ''}</td>`},
   type:{label:'Type', cell:a => `<td>${typeLink(a)}</td>`},
   model:{label:'Model', cell:a => `<td>${modelLink(a)}</td>`},
   serial:{label:'Serial Number', cell:a => `<td class="muted serial" data-v="${esc(a.serial)}">${esc(a.serial)}${a.serial ? copyBtn(a.serial) : ''}</td>`},
@@ -293,16 +400,42 @@ const ASSET_COLS = {
   legacy:{label:'Legacy ID', cell:a => clipCell(a.legacyTag)},
 };
 const DEFAULT_COLS = ['tag', 'name', 'type', 'model', 'serial', 'status', 'warranty', 'location', 'country', 'office'];
+// the values a column sorts by, before paging
+const ASSET_SORT = {tag:a => a.tag, name:assetName, type:a => typeLabel(a.type), model:modelName, serial:a => a.serial, status:a => STATUS[a.status].label, warranty:a => a.warrantyUntil || '',
+  location:whereText, country:a => officeCountry(a.officeId).name || '', office:a => officeLabel(a.officeId), note:a => a.note, service:a => serviceName(a.serviceId || (assetPerson(a) || {}).serviceId),
+  person:a => (assetPerson(a) || {}).name || '', supplier:a => a.supplier, orderNo:a => a.orderNo, arrived:a => a.arrived || '', legacy:a => a.legacyTag};
 function assetRows(list, opts = {}){
   if (!list.length) return `<div class="empty">No assets.</div>`;
-  const cols = opts.cols || (opts.noLoc ? DEFAULT_COLS.slice(0, 7) : DEFAULT_COLS);
-  return `<div class="tbl-wrap"><table class="atable"><thead><tr>${opts.select ? '<th class="sel"><input type="checkbox" id="selAll" title="Select all"></th>' : ''}<th></th>${cols.map(c => `<th>${ASSET_COLS[c].label}</th>`).join('')}${opts.actions ? '<th></th>' : ''}</tr></thead><tbody>` +
+  const cols = opts.cols || (opts.noLoc ? DEFAULT_COLS.slice(0, 7) : DEFAULT_COLS), W = opts.widths || null;
+  const fixed = W && cols.every(c => W[c]), wd = k => fixed && W[k] ? ` style="width:${W[k]}px"` : '';
+  const grip = opts.widthsKey ? '<span class="colgrip" title="Drag to resize · double-click to reset"></span>' : '';
+  const total = fixed ? Object.entries(W).filter(([k]) => ['sel', 'icon', 'act', ...cols].includes(k)).reduce((s, [, w]) => s + w, 0) : 0;
+  return `<div class="tbl-wrap"><table class="atable"${opts.dataSort ? ' data-datasort="1"' : ''}${opts.widthsKey ? ` data-widths="${opts.widthsKey}"` : ''}${fixed ? ` style="table-layout:fixed;width:${total}px"` : ''}><thead><tr>
+    ${opts.select ? `<th class="sel" data-col="sel"${wd('sel')}><input type="checkbox" id="selAll" title="Select all on this page" aria-label="Select all on this page"></th>` : ''}<th data-col="icon"${wd('icon')}></th>
+    ${cols.map(c => `<th data-col="${c}"${wd(c)}>${ASSET_COLS[c].label}${grip}</th>`).join('')}${opts.actions || opts.rowActions ? `<th class="actcol" data-col="act"${wd('act')}>${opts.rowActions ? 'Actions' : ''}</th>` : ''}</tr></thead><tbody>` +
     list.map(a => `<tr${selected.has(a.id) ? ' class="picked"' : ''}>
-      ${opts.select ? `<td class="sel"><input type="checkbox" class="selbox" data-id="${a.id}"${selected.has(a.id) ? ' checked' : ''}></td>` : ''}
+      ${opts.select ? `<td class="sel"><input type="checkbox" class="selbox" data-id="${a.id}"${selected.has(a.id) ? ' checked' : ''} aria-label="Select ${esc(a.tag)}"></td>` : ''}
       <td style="width:40px">${assetIcon(a)}</td>
       ${cols.map(c => ASSET_COLS[c].cell(a)).join('')}
-      ${opts.actions ? `<td style="text-align:right;white-space:nowrap">${opts.actions(a)}</td>` : ''}
+      ${opts.rowActions ? `<td class="rowact">${assetRowActions(a)}</td>` : opts.actions ? `<td style="text-align:right;white-space:nowrap">${opts.actions(a)}</td>` : ''}
     </tr>`).join('') + '</tbody></table></div>';
+}
+// Edit · Duplicate · Move · Delete; the permission layer removes what this account may not do at the asset's office
+function assetRowActions(a){
+  const mv = canAt('assets.move', a.officeId) || canAt('assets.assign', a.officeId);
+  return iconBtn('edit', 'Edit ' + a.tag, `assetForm(asset('${a.id}'))`) + iconBtn('dup', 'Duplicate ' + a.tag, `duplicateAsset('${a.id}')`)
+    + (mv ? iconBtn('move', a.holder.kind === 'transit' ? 'In transit – cannot be moved' : 'Move ' + a.tag, `moveDialog('${a.id}')`, a.holder.kind === 'transit' ? 'off' : '') : '')
+    + iconBtn('del', 'Delete ' + a.tag, `deleteAsset('${a.id}')`, 'danger');
+}
+// below a paged table: the range shown, the pages and the page size
+const PAGE_SIZES = [10, 20, 50, 100];
+function pager(total, page, size, key){
+  const pages = Math.max(1, Math.ceil(total / size)), from = total ? (page - 1) * size + 1 : 0, to = Math.min(total, page * size);
+  const nums = [...new Set([1, page - 1, page, page + 1, pages])].filter(n => n >= 1 && n <= pages).sort((a, b) => a - b);
+  const btn = (n, l, on, lbl) => `<button type="button" class="sm${on ? ' primary' : ''}" data-page="${n}" ${n < 1 || n > pages || (on && l === String(n)) ? 'disabled' : ''} aria-label="${lbl || 'Page ' + n}">${l}</button>`;
+  return `<div class="pager" data-pager="${key}"><span>Showing <b>${from}–${to}</b> of <b>${total}</b></span><span class="spacer"></span>
+    ${btn(page - 1, '‹', false, 'Previous page')}${nums.map((n, i) => (i && n - nums[i - 1] > 1 ? '<span class="muted">…</span>' : '') + btn(n, String(n), n === page)).join('')}${btn(page + 1, '›', false, 'Next page')}
+    <label class="muted">Rows per page <select data-pagesize aria-label="Rows per page">${PAGE_SIZES.map(s => `<option${s === size ? ' selected' : ''}>${s}</option>`).join('')}</select></label></div>`;
 }
 
 // ---------- logs ----------
@@ -319,25 +452,51 @@ function logTable(entries, o = {}){
 }
 // "Project activity" covers every entry linked to a project (checkouts done by a project completion too)
 const logMatches = (l, cat) => !cat ? true : cat === 'project' ? l.cat === 'project' || !!l.projectId : l.cat === cat;
+// the module an entry belongs to, read from what the entry is about
+const LOG_MODULES = {assets:'Assets', people:'People', floorplan:'Floorplan', projects:'Projects', documents:'Documents', settings:'Settings', admin:'Admin Panel', system:'Other'};
+function logModule(l){
+  const t = l.text || '';
+  if (l.cat === 'config') return /^(Country|Office)\b/.test(t) ? 'floorplan' : /^(Document template|Label preset)/.test(t) ? 'documents' : /^(Account|Role|Permission|Branding)/.test(t) ? 'admin' : 'settings';
+  if (l.projectId || l.cat === 'project') return 'projects';
+  if (/^Floorplan saved/.test(t)) return 'floorplan';
+  if (/document/i.test(t)) return 'documents';
+  if (l.assetId) return 'assets';
+  if (l.cat === 'status' || l.personId || /^(Person deleted|\d+ people imported)/.test(t)) return 'people';
+  return 'system';
+}
+const logSubjectText = l => [(asset(l.assetId) || {}).tag || (l.assetId ? 'deleted asset' : ''), (project(l.projectId) || {}).name, (person(l.personId) || {}).name].filter(Boolean).join(' · ');
+const LOG_FACETS = {
+  cat:{label:'Type', all:'All types', order:Object.keys(LOG_CATS), vals:l => [l.cat], name:v => LOG_CATS[v] || v},
+  module:{label:'Module', all:'All modules', order:Object.keys(LOG_MODULES), vals:l => [logModule(l)], name:v => LOG_MODULES[v]},
+  by:{label:'By', all:'Everyone', vals:l => [l.by || '__none'], name:v => v === '__none' ? 'Unknown' : v},
+};
+// the date range is inclusive at both ends, in local time
+const logBase = P => { const q = P.get('q') || '', from = P.get('from') || '', to = P.get('to') || '';
+  return scopedLog().filter(l => (!q || matchWords([l.text, l.by, logSubjectText(l), l.ticket, l.note].join(' '), q)) && inRange(isoDay(l.ts), from, to)); };
+const LOG_SET = {base:logBase, defs:LOG_FACETS};
+const logsFiltered = P => facetRun(logBase(P), LOG_FACETS, P).list;
 function viewLogs(params){
-  const cat = params.get('cat') || '', q = params.get('q') || '';
-  const base = scopedLog();
-  let list = base.filter(l => logMatches(l, cat));
-  if (q){ const n = norm(q); list = list.filter(l => norm([l.text, l.by, (asset(l.assetId) || {}).tag, (project(l.projectId) || {}).name, (person(l.personId) || {}).name].join(' ')).includes(n)); }
-  const chip = (c, label) => { const n = base.filter(l => logMatches(l, c)).length;
-    return `<a href="#/log${c ? '?cat=' + c : ''}" class="${c === cat ? 'on' : ''}">${label} <small>${n}</small></a>`; };
-  return `<h1>Logs</h1><div class="sub">Moves, checkouts, returns, changes, status updates and project events.</div>
+  const run = facetRun(logBase(params), LOG_FACETS, params), list = run.list, cat = params.get('cat') || '';
+  // the quick type chips keep the other filters and show how many each type has under them
+  const chip = (c, label) => { const p = new URLSearchParams(params); if (c) p.set('cat', c); else p.delete('cat');
+    const n = c ? run.counts.cat.get(c) || 0 : [...run.counts.cat.values()].reduce((s, x) => s + x, 0);
+    return `<a href="#/log${p.toString() ? '?' + p : ''}" class="${c === cat ? 'on' : ''}">${label} <small>${n}</small></a>`; };
+  return `<div class="row"><h1>Logs</h1><span class="spacer"></span><button onclick="exportLogs('csv')">⬇ CSV</button><button onclick="exportLogs('xlsx')">⬇ Excel</button></div>
+    <div class="sub">Moves, checkouts, returns, changes, status updates and project events. Exports contain every entry that matches the filters.</div>
     <div class="fchips">${chip('', 'All')}${Object.entries(LOG_CATS).map(([k, v]) => chip(k, v)).join('')}</div>
-    <div class="row" style="margin-bottom:12px"><input id="lq" placeholder="Filter by text, Asset ID, project…" value="${esc(q)}" style="min-width:300px">
-      <span class="muted">${list.length} entries${list.length > 500 ? ' (first 500 shown)' : ''}</span></div>
+    ${filterBar({route:'#/log', facets:LOG_FACETS, params, counts:run.counts, placeholder:'Search: text, Asset ID, project, person, ticket…', dates:'Date', total:scopedLog().length, n:list.length})}
+    ${list.length > 500 ? '<p class="muted">The first 500 entries are shown; the export contains all of them.</p>' : ''}
     ${logTable(list.slice(0, 500))}`;
 }
-function bindLogs(params){
-  $('#lq').addEventListener('input', e => {
-    const p = new URLSearchParams(); if (params.get('cat')) p.set('cat', params.get('cat')); if (e.target.value) p.set('q', e.target.value);
-    history.replaceState(null, '', '#/log' + (p.toString() ? '?' + p : ''));
-    const pos = e.target.selectionStart; render(); $('#lq').focus(); $('#lq').setSelectionRange(pos, pos);
-  });
+const bindLogs = () => bindFilterBar('#/log', LOG_SET);
+function exportLogs(kind){
+  const P = new URLSearchParams(location.hash.split('?')[1] || ''), list = logsFiltered(P);
+  if (!list.length){ toast('No log entries match the filters – nothing to export.'); return; }
+  const head = ['Date', 'By', 'Type', 'Module', 'Subject', 'Description', 'From', 'To', 'Ticket', 'Note'];
+  const rows = list.map(l => [fmtTime(l.ts), l.by || '', LOG_CATS[l.cat] || l.cat, LOG_MODULES[logModule(l)], logSubjectText(l), l.text, l.from || '', l.to || '', l.ticket || '', l.note || '']);
+  if (kind === 'csv') download(`tc-itam-logs-${stamp()}.csv`, '﻿' + [head, ...rows].map(csvLine).join('\r\n'), 'text/csv');
+  else download(`tc-itam-logs-${stamp()}.xlsx`, xlsxBlob([xlTable('Logs', head, rows, [17, 16, 14, 12, 24, 60, 30, 30, 12, 24])]));
+  toast(`${rows.length} log entries exported.`);
 }
 
 // ---------- global search ----------

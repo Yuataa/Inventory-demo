@@ -24,7 +24,9 @@ function makeDoc(pid, kind, ids, o = {}){
   const p = person(pid);
   return {id:uid(), no:nextDocNo(kind), kind, personId:pid, personName:p ? p.name : '', date:o.date || todayIso(), handler:o.handler || db.settings.handler,
     note:o.note || '', reason:o.reason || '', createdAt:Date.now(), fileId:null, projectId:o.projectId || null, swapId:o.swapId || null,
-    items:o.items || ids.map(asset).filter(Boolean).map(snapAsset), tpl:tplSnapshot(kind, db.settings), esign:{provider:'', status:'not_sent', envelopeId:null}};
+    items:o.items || ids.map(asset).filter(Boolean).map(snapAsset), tpl:tplSnapshot(kind, db.settings), esign:{provider:'', status:'not_sent', envelopeId:null},
+    // a document template chosen here (or the default one of its type) is copied into the document; '' means the built-in layout
+    pdfTpl:tplSnapshotOf(tplOf(o.tplId === undefined ? defaultTplFor(kind) : o.tplId))};
 }
 // connection point for SignNow / Adobe Acrobat Sign. It needs a server for the API keys, so it only reports that today.
 function esignRequest(doc){ return {ok:false, reason:'E-signature is not connected. It needs a server-side integration.'}; }
@@ -49,17 +51,20 @@ function docChips(d){
     return s ? `<span title="${esc(`Replaced ${fmtDate(s.date)}: ${s.reason}`)}"><s>${chip(i)}</s> 🔁 <a class="chip" href="#/asset/${s.newId}">${esc((asset(s.newId) || {}).tag || s.newTag)}</a></span>` : chip(i);
   }).join(' ');
 }
-function docTable(docs, showPerson){
+// the office and Service shown for a document come from its person; a document without a living person says so
+const NOT_ASSIGNED = '<span class="muted">Not assigned</span>';
+function docTable(docs, showPerson, o = {}){
   if (!docs.length) return '<div class="empty">No documents yet.</div>';
-  return `<div class="tbl-wrap"><table><thead><tr><th>Number</th><th>Type</th>${showPerson ? '<th>Person</th>' : ''}<th>Date</th><th>Assets</th><th>Status</th><th></th></tr></thead><tbody>${docs.map(d => {
+  return `<div class="tbl-wrap"><table><thead><tr><th>Number</th><th>Type</th>${showPerson ? '<th>Person</th>' : ''}${o.where ? '<th>City / Office</th><th>Service</th>' : ''}<th>Date</th><th>Assets</th><th>Status</th><th></th></tr></thead><tbody>${docs.map(d => {
     const p = person(d.personId), pr = d.projectId && project(d.projectId);
     return `<tr><td class="tag">${esc(d.no)}${pr ? `<br><a class="pill acc" href="#/project/${pr.id}">📋 ${esc(pr.name)}</a>` : ''}</td><td>${DOC_KINDS[d.kind].label}</td>
-      ${showPerson ? `<td>${p ? `<a href="#/person/${p.id}">${esc(p.name)}</a>` : esc(d.personName || '?')}</td>` : ''}
+      ${showPerson ? `<td>${p ? `<a href="#/person/${p.id}">${esc(p.name)}</a>` : d.personName ? `${esc(d.personName)} <small class="muted">(deleted)</small>` : NOT_ASSIGNED}</td>` : ''}
+      ${o.where ? `<td>${p ? `${esc(officeCountry(p.officeId).name || '')} · ${esc(officeLabel(p.officeId))}` : NOT_ASSIGNED}</td><td>${p && p.serviceId ? esc(serviceName(p.serviceId)) : NOT_ASSIGNED}</td>` : ''}
       <td style="white-space:nowrap">${fmtDate(d.date)}</td>
       <td>${docChips(d)}</td>
       <td>${d.fileId ? `<span class="pill ok">✔ Signed</span><br><small class="muted">uploaded: ${fmtTime(d.signedAt)}</small>` : '<span class="pill warn">Awaiting signature</span>'}</td>
       <td style="text-align:right;white-space:nowrap">
-        <button class="sm" onclick="printDoc('${d.id}')" title="Open the filled-in document – print / save as PDF">🖨 Filled PDF</button>
+        <button class="sm" onclick="printDoc('${d.id}')" title="${d.pdfTpl ? 'Open the PDF made with template “' + esc(d.pdfTpl.name) + '”' : 'Open the filled-in document – print / save as PDF'}">🖨 Filled PDF</button>${d.pdfTpl ? `<button class="sm" onclick="openDocPdf(byId(db.docs,'${d.id}'), true)" title="Download the PDF">⬇ PDF</button>` : ''}
         ${d.fileId ? `<button class="sm" onclick="openDocFile('${d.id}')" title="Open the signed copy">👁 Signed</button><button class="sm" onclick="openDocFile('${d.id}', true)" title="Download the signed copy">⬇</button>` : ''}
         ${db.settings.esignProvider && !d.fileId ? `<button class="sm" disabled title="${esc(esignRequest(d).reason)}">✍ ${esc(ESIGN_PROVIDERS[db.settings.esignProvider])}: not connected</button>` : ''}
         <button class="sm${d.fileId ? '' : ' primary'}" onclick="uploadSigned('${d.id}')">⬆ ${d.fileId ? 'Replace' : 'Upload signed'}</button>
@@ -75,7 +80,8 @@ function docDialog(pid, kind, preIds){
   openDialog(`
     <h3>📄 Document – ${esc(p.name)}</h3>
     <label class="f">Document type</label>
-    <select name="kind">${Object.entries(DOC_KINDS).filter(([k]) => k !== 'swap').map(([k, v]) => `<option value="${k}"${k === kind ? ' selected' : ''}>${v.title}</option>`).join('')}</select>
+    <select name="kind" id="docKind">${Object.entries(DOC_KINDS).filter(([k]) => k !== 'swap').map(([k, v]) => `<option value="${k}"${k === kind ? ' selected' : ''}>${v.title}</option>`).join('')}</select>
+    <label class="f">Layout</label><select name="tplId" id="docTpl"></select>
     <label class="f">Assets on the document</label>
     <div class="checklist">${cand.map(a => `<label><input type="checkbox" name="a_${a.id}"${pre.has(a.id) ? ' checked' : ''}> ${assetIcon(a)}
       <span><b class="tag">${esc(a.tag)}</b> · ${esc(typeLabel(a.type))} · ${esc(modelName(a))} <span class="muted">${where(a) ? '(' + where(a) + ')' : ''}</span></span></label>`).join('')}</div>
@@ -89,13 +95,17 @@ function docDialog(pid, kind, preIds){
     data => {
       const ids = cand.filter(a => data['a_' + a.id]).map(a => a.id);
       if (!ids.length){ alert('Select at least one asset.'); return false; }
-      const doc = createDoc(pid, data.kind, ids, {date:data.date, handler:data.handler.trim(), note:data.note.trim()});
+      const doc = createDoc(pid, data.kind, ids, {date:data.date, handler:data.handler.trim(), note:data.note.trim(), tplId:data.tplId});
       save(); render(); printDoc(doc.id);
     });
+  const fillTpl = () => { const k = $('#docKind').value, def = defaultTplFor(k);
+    $('#docTpl').innerHTML = `<option value="">Built-in layout</option>${sortHu(tplsFor(k), t => t.name).map(t => `<option value="${t.id}"${t.id === def ? ' selected' : ''}>📐 ${esc(t.name)}</option>`).join('')}`; };
+  $('#docKind').addEventListener('change', fillTpl); fillTpl();
   $('#docPrev').addEventListener('click', () => {
     const form = $('#dlgForm'), ids = cand.filter(a => form.elements['a_' + a.id].checked).map(a => a.id);
     if (!ids.length){ alert('Select at least one asset.'); return; }
-    openPrintWindow(docHtml(makeDoc(pid, form.elements.kind.value, ids, {date:form.elements.date.value, handler:form.elements.handler.value.trim(), note:form.elements.note.value.trim()})));
+    const d = makeDoc(pid, form.elements.kind.value, ids, {date:form.elements.date.value, handler:form.elements.handler.value.trim(), note:form.elements.note.value.trim(), tplId:form.elements.tplId.value});
+    if (d.pdfTpl) openDocPdf(d); else openPrintWindow(docHtml(d));
   });
 }
 function docHtml(d){
@@ -154,7 +164,7 @@ function docHtml(d){
     <div class="ft">${esc(t.footer)} · ${esc(d.no)}</div>
   </div></body></html>`;
 }
-function printDoc(id){ openPrintWindow(docHtml(byId(db.docs, id))); }
+function printDoc(id){ const d = byId(db.docs, id); if (d.pdfTpl && !tour.on) openDocPdf(d); else openPrintWindow(docHtml(d)); }
 function openPrintWindow(html){
   if (tour.on){ showTourDoc(html); return; }
   const w = window.open('', '_blank');
@@ -200,20 +210,31 @@ async function deleteDoc(id){
   if (!confirm(`Delete document ${d.no}${d.fileId ? ' and its signed copy' : ''}?`)) return;
   if (d.fileId) await idb.del(d.fileId).catch(() => {});
   db.docs = db.docs.filter(x => x.id !== id); save(); render();
+  if (d.pdfTpl) gcTplFiles(d.pdfTpl.pages.map(p => p.fileId));
 }
+// linked filters for Documents (same engine as Assets); "f" keeps its old meaning so existing links still work
+const docPerson = d => person(d.personId);
+const DOC_FACETS = {
+  kind:{label:'Document Type', all:'All types', order:Object.keys(DOC_KINDS), vals:d => [d.kind], name:v => DOC_KINDS[v].label},
+  person:{label:'Person', all:'All people', vals:d => [docPerson(d) ? d.personId : '__none'], name:v => v === '__none' ? 'Not assigned' : (person(v) || {}).name},
+  service:{label:'Service', all:'All Services', vals:d => [(docPerson(d) || {}).serviceId || '__none'], name:v => v === '__none' ? 'Not assigned' : serviceName(v)},
+  country:{label:'Country', all:'All countries', vals:d => [docPerson(d) ? officeCountry(docPerson(d).officeId).id || '__none' : '__none'], name:v => v === '__none' ? 'Not assigned' : (country(v) || {}).name},
+  office:{label:'City / Office', all:'All Offices', vals:d => [(docPerson(d) || {}).officeId || '__none'], name:v => v === '__none' ? 'Not assigned' : officeLabel(v)},
+  f:{label:'Signature', all:'Signed or not', order:['wait', 'signed'], vals:d => [d.fileId ? 'signed' : 'wait'], name:v => v === 'wait' ? 'Awaiting signature' : '✔ Signed'},
+};
+const docBase = P => { const q = P.get('q') || '', from = P.get('from') || '', to = P.get('to') || '';
+  return scopedDocs().filter(d => (!q || matchWords([d.no, d.personName, (docPerson(d) || {}).name, ...d.items.map(i => i.tag + ' ' + i.serial + ' ' + i.model)].join(' '), q)) && inRange(d.date || isoDay(d.createdAt), from, to)); };
+const DOC_SET = {base:docBase, defs:DOC_FACETS};
+const bindDocs = () => bindFilterBar('#/docs', DOC_SET);
 function viewDocs(params){
-  const f = params.get('f') || '';
-  let docs = scopedDocs();
-  if (f === 'wait') docs = docs.filter(d => !d.fileId);
-  if (f === 'signed') docs = docs.filter(d => d.fileId);
+  const run = facetRun(docBase(params), DOC_FACETS, params), docs = run.list;
   const missing = scopedPeople().filter(p => uncovered(p.id).length);
-  const opt = (v, l) => `<option value="${v}"${f === v ? ' selected' : ''}>${l}</option>`;
   return `
     <h1>Documents</h1>
     <div class="sub">Handover, return and swap documents. New ones are created on the person page, at checkout or when a project is completed.</div>
     ${missing.length ? `<div class="warnbox" style="font-size:14px">⚠️ Assets without a document: ${missing.map(p => `<a href="#/person/${p.id}">${esc(p.name)}</a> (${uncovered(p.id).length})`).join(', ')}</div>` : ''}
-    <div class="row" style="margin:12px 0"><span class="spacer"></span><select id="df">${opt('', 'All')}${opt('wait', 'Awaiting signature')}${opt('signed', '✔ Signed')}</select></div>
-    ${docTable(docs, true)}
+    ${filterBar({route:'#/docs', facets:DOC_FACETS, params, counts:run.counts, placeholder:'Search: number, person, Asset ID, serial…', dates:'Date', total:scopedDocs().length, n:docs.length})}
+    ${docTable(docs, true, {where:true})}
     <h2>🔁 Swaps (${db.swaps.length})</h2>
     <div class="sub" style="margin-bottom:8px">Tracking of faulty and replaced assets. Start a swap with the “🔁 Swap” button on the person or asset page.</div>
     ${swapTable(db.swaps)}`;

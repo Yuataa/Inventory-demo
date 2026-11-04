@@ -1,28 +1,25 @@
 'use strict';
 /* People: list and filters, detail page, user status and tickets, awaited returns, form, Excel import (name, Service, Work Mode) */
 
+// linked filters for People (same engine as Assets)
+const PEOPLE_FACETS = {
+  office:{label:'City / Office', all:'All Offices', vals:p => [p.officeId], name:officeLabel},
+  service:{label:'Service', all:'All Services', vals:p => [p.serviceId || '__none'], name:v => v === '__none' ? '– no Service –' : serviceName(v)},
+  role:{label:'Job Role', all:'All Job Roles', vals:p => [p.roleId || '__none'], name:v => v === '__none' ? '– no Job Role –' : roleName(v)},
+  mode:{label:'Work Mode', all:'All Work Modes', vals:p => [p.mode], name:v => `${modeIcon(v)} ${modeName(v)}`},
+  status:{label:'User Status', all:'All User Statuses', order:Object.keys(USER_STATUS), vals:p => [p.status], name:v => v},
+  assets:{label:'Assets', all:'With or without assets', order:['yes', 'no'], vals:p => [personAssets(p.id).direct.length ? 'yes' : 'no'], name:v => v === 'yes' ? 'Holds assets' : 'Holds no assets'},
+};
+const peopleBase = P => { const q = P.get('q') || ''; return scopedPeople().filter(p => !q || matchWords([p.name, p.email, serviceName(p.serviceId), roleName(p.roleId), modeName(p.mode), p.status, officeLabel(p.officeId), ...p.tickets.map(t => t.no)].join(' '), q)); };
+const PEOPLE_SET = {base:peopleBase, defs:PEOPLE_FACETS};
 function viewPeople(params){
-  const q = params.get('q') || '', svc = params.get('service') || '', mode = params.get('mode') || '', st = params.get('status') || '';
-  const scoped = scopedPeople();
-  let list = scoped;
-  if (svc) list = list.filter(p => svc === '__none' ? !p.serviceId : p.serviceId === svc);
-  if (mode) list = list.filter(p => p.mode === mode);
-  if (st) list = list.filter(p => p.status === st);
-  if (q){ const n = norm(q); list = list.filter(p => norm([p.name, p.email, serviceName(p.serviceId), roleName(p.roleId), modeName(p.mode), p.status, ...p.tickets.map(t => t.no)].join(' ')).includes(n)); }
-  list = sortHu(list, p => p.name);
+  const scoped = scopedPeople(), run = facetRun(peopleBase(params), PEOPLE_FACETS, params), list = sortHu(run.list, p => p.name);
   return `
     <div class="row"><h1>People</h1><span class="spacer"></span>
       <a class="btn" href="#/people/import">⬆ Import from Excel</a>
       <button class="primary" onclick="personForm()">+ New person</button></div>
-    <div class="sub">${list.length} of ${scoped.length} people${q || svc || mode || st ? ' · <a href="#/people">clear filters</a>' : ''}</div>
-    <div class="row" style="margin-bottom:12px">
-      <input id="pq" placeholder="Filter: name, e-mail, ticket ID…" value="${esc(q)}" style="min-width:220px">
-      <select id="psvc"><option value="">All Services</option>${sortHu(db.services, s => s.name).map(s => `<option value="${s.id}"${s.id === svc ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}
-        <option value="__none"${svc === '__none' ? ' selected' : ''}>– no Service –</option></select>
-      <select id="pmode"><option value="">All Work Modes</option>${db.modes.map(m => `<option value="${esc(m.id)}"${m.id === mode ? ' selected' : ''}>${m.icon} ${esc(m.name)}</option>`).join('')}</select>
-      <select id="pstatus"><option value="">All User Statuses</option>${Object.keys(USER_STATUS).map(s => `<option${s === st ? ' selected' : ''}>${s}</option>`).join('')}</select>
-    </div>
-    ${list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>City / Office</th><th>Service</th><th>Job Role</th><th>Work Mode</th><th>User Status</th><th>Tickets</th><th>Desk</th><th>Assets</th><th>Document</th></tr></thead><tbody>${list.map(p => {
+    ${filterBar({route:'#/people', facets:PEOPLE_FACETS, params, counts:run.counts, placeholder:'Search: name, e-mail, ticket ID, Service…', total:scoped.length, n:list.length})}
+    ${list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>City / Office</th><th>Service</th><th>Job Role</th><th>Work Mode</th><th>User Status</th><th>Tickets</th><th>Desk</th><th>Assets</th><th>Document</th><th class="actcol">Actions</th></tr></thead><tbody>${list.map(p => {
       const pa = personAssets(p.id), all = [...pa.direct, ...pa.onDesk];
       return `<tr><td><a href="#/person/${p.id}">${esc(p.name)}</a><br><small class="muted">${esc(p.email)}</small></td><td>${esc(officeLabel(p.officeId))}</td>
         <td>${p.serviceId ? `<a href="#/people?service=${p.serviceId}">${esc(serviceName(p.serviceId))}</a>` : '<span class="muted">–</span>'}</td>
@@ -31,18 +28,11 @@ function viewPeople(params){
         <td>${p.tickets.map(t => `<span class="tag">${esc(t.no)}</span>`).join('<br>') || '<span class="muted">–</span>'}</td>
         <td>${pa.desks.map(k => `<a href="#/room/${k.roomId}/${k.id}">${esc((room(k.roomId) || {}).name || '?')} › ${esc(k.label)}</a>`).join('<br>') || '<span class="muted">–</span>'}</td>
         <td>${all.map(a => `<a class="chip" href="#/asset/${a.id}">${typeIcon(a.type)} ${esc(a.tag)}</a>`).join(' ') || '<span class="muted">–</span>'}</td>
-        <td>${docBadges(p.id)}</td></tr>`;
+        <td>${docBadges(p.id)}</td>
+        <td class="rowact">${iconBtn('edit', 'Edit ' + p.name, `personForm(person('${p.id}'))`)}${iconBtn('del', 'Delete ' + p.name, `deletePerson('${p.id}')`, 'danger')}</td></tr>`;
     }).join('')}</tbody></table></div>` : '<div class="empty">Nobody matches the filter.</div>'}`;
 }
-function bindPeopleFilters(){
-  const upd = () => {
-    const p = new URLSearchParams();
-    if ($('#pq').value) p.set('q', $('#pq').value); if ($('#psvc').value) p.set('service', $('#psvc').value); if ($('#pmode').value) p.set('mode', $('#pmode').value); if ($('#pstatus').value) p.set('status', $('#pstatus').value);
-    history.replaceState(null, '', '#/people' + (p.toString() ? '?' + p : ''));
-    const pos = $('#pq').selectionStart; render(); $('#pq').focus(); $('#pq').setSelectionRange(pos, pos);
-  };
-  $('#pq').addEventListener('input', upd); $('#psvc').addEventListener('change', upd); $('#pmode').addEventListener('change', upd); $('#pstatus').addEventListener('change', upd);
-}
+const bindPeopleFilters = () => bindFilterBar('#/people', PEOPLE_SET);
 
 // ---------- user status, tickets and awaited returns ----------
 const statusEffect = (p, s) => {
@@ -190,16 +180,28 @@ function personForm(p, onCreated){
       } else { Object.assign(p, v); save(); render(); }
     });
 }
-function deletePerson(id){
-  const p = person(id), pa = personAssets(id);
-  if (db.projects.some(pr => pr.status !== 'completed' && pr.status !== 'cancelled' && pr.participants.some(x => x.personId === id))){
-    alert('This person is a participant of an active project. Remove them from it first.'); return;
-  }
-  if (!confirm(`Delete ${p.name}?\nTheir ${pa.direct.length} asset(s) go back to stock and their desk becomes free.\nTheir documents stay in Documents.`)) return;
-  for (const a of pa.direct) setHolder(a, {kind:'storage'});
+// everything that points to the person is listed first; nothing is left pointing to a person that no longer exists
+async function deletePerson(id){
+  const p = person(id); if (!p) return;
+  const pa = personAssets(id), act = db.projects.filter(pr => isActive(pr) && (pr.participants.some(x => x.personId === id) || pr.replacements.some(r => r.personId === id) || pr.shipments.some(s => s.status !== 'Received' && (s.sendPersonId === id || s.recvPersonId === id))));
+  if (act.length){ alert(`${p.name} is part of an active project: ${act.map(pr => pr.name).join(', ')}.\nRemove them from it (or finish the project) first.`); return; }
+  const placed = db.assets.filter(a => a.placement && a.holder.kind === 'person' && a.holder.id === id);
+  const accs = db.accounts.filter(c => c.personId === id), docs = db.docs.filter(d => d.personId === id).length, rets = openReturns(id).length;
+  const ok = await askConfirm('Delete person', `<p>Delete <b>${esc(p.name)}</b>? This cannot be undone.</p><ul>
+    ${pa.direct.length ? `<li><b>${pa.direct.length}</b> assigned asset(s) are returned to the stock of their office: ${pa.direct.map(a => `<span class="tag">${esc(a.tag)}</span>`).join(', ')}.${placed.length ? ' Hybrid assets are taken off the desk.' : ''}</li>` : '<li>No assets are assigned to them.</li>'}
+    ${rets ? `<li>${rets} expected return(s) are closed by that return.</li>` : ''}
+    ${pa.desks.length ? `<li>Their desk${pa.desks.length > 1 ? 's become' : ' becomes'} free: ${pa.desks.map(k => esc(k.label)).join(', ')}. Assets on the desk stay there.</li>` : ''}
+    ${accs.length ? `<li>Linked account${accs.length > 1 ? 's' : ''} ${accs.map(c => esc(c.username)).join(', ')} stay${accs.length > 1 ? '' : 's'}, without a person.</li>` : ''}
+    ${docs ? `<li>${docs} document(s) stay in Documents with the name recorded on them.</li>` : ''}</ul>`, pa.direct.length ? `Return ${pa.direct.length} asset(s) and delete` : 'Delete person');
+  if (!ok) return;
+  for (const a of pa.direct) setHolder(a, {kind:'storage'}, {note:'Person deleted: ' + p.name});
   for (const k of pa.desks) k.personId = null;
-  for (const c of db.accounts) if (c.personId === id) c.personId = null;   // the account stays, without a person
-  db.people = db.people.filter(x => x.id !== id); save(); location.hash = '#/people';
+  for (const c of accs) c.personId = null;
+  for (const r of db.returns) if (r.personId === id && r.state === 'notRequired'){ r.state = 'cancelled'; r.closedAt = Date.now(); }
+  log(null, `Person deleted: ${p.name}`, 'updated');
+  db.people = db.people.filter(x => x.id !== id); save();
+  if (location.hash.startsWith('#/person/')) location.hash = '#/people'; else render();
+  toast(`${p.name} deleted.`);
 }
 
 // ---------- people import: exactly three columns – full name, Service, Work Mode ----------

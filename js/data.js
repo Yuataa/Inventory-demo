@@ -8,6 +8,7 @@ const TOUR_BACKUP = KEY + '_tour_backup';
 const USER_KEY = 'itraktar_user';
 
 const THEME_KEY = 'itraktar_theme';
+const NAV_KEY = 'itraktar_nav';
 
 // work modes are configurable (db.modes); behavior drives the floorplan rules, so a renamed mode keeps working
 const DEFAULT_MODES = [
@@ -159,13 +160,14 @@ function save(){ gcImages(); persist(db); }
 
 // v1 (single html) and v2 data are both brought to the current shape
 function migrate(d){
-  for (const k of ['people', 'rooms', 'desks', 'assets', 'log', 'items', 'docs', 'swaps', 'services', 'roles', 'models', 'fieldSets', 'projects', 'returns', 'offices', 'accounts', 'countries', 'accessRoles']) d[k] ||= [];
+  for (const k of ['people', 'rooms', 'desks', 'assets', 'log', 'items', 'docs', 'swaps', 'services', 'roles', 'models', 'fieldSets', 'projects', 'returns', 'offices', 'accounts', 'countries', 'accessRoles', 'docTemplates']) d[k] ||= [];
   d.images ||= {}; d.seq ||= {asset:0};
   d.settings = {...DEFAULT_SETTINGS, ...(d.settings || {})};
   d.settings.agedYears ||= 5;
   d.settings.branding = {...DEFAULT_BRANDING, ...(d.settings.branding || {})};
   d.settings.docTitles = {...DEFAULT_SETTINGS.docTitles, ...d.settings.docTitles};
   d.settings.docShow = {...DEFAULT_SETTINGS.docShow, ...d.settings.docShow};
+  d.settings.docTplDefault ||= {};
   if (!d.settings.labelPresets) d.settings.labelPresets = [{...DEFAULT_PRESET, fields:{...DEFAULT_PRESET.fields}, ...(d.settings.label || LABEL_DEFAULT)}];
   for (const p of d.settings.labelPresets) p.qrMode ||= 'serial';
   d.settings.labelPresetId ||= d.settings.labelPresets[0].id;

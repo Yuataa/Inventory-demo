@@ -2,150 +2,68 @@
 /* Dashboard, asset list and views, asset page and form, assignment and return flows, swap, asset import */
 
 // ---------- filtering (shared by the list and the dashboard, so the counts always match) ----------
-function filterAssets(P){
+const LOC_LABEL = {desk:'🪑 On a desk / in a rack', office:'🏢 In a room pool', site:'🏢 At an office, not placed', transit:'🚚 In transit', person:'👤 Assigned to a person', storage:'📦 In Stock'};
+// every filter is a facet of the shared engine (ui.js): the list and each filter's options come from the same rules
+const warrState = a => { const w = warranty(a); return w.days === null ? 'none' : w.days < 0 ? 'bad' : w.days <= 60 ? 'soon' : 'ok'; };
+const deskOf = a => a.holder.kind === 'desk' ? a.holder.id : a.placement ? a.placement.deskId : '';
+const ASSET_FACETS = {
+  view:{label:'View', all:'All assets', order:Object.keys(ASSET_VIEWS), vals:a => Object.keys(ASSET_VIEWS).filter(k => ASSET_VIEWS[k].test(a)), name:v => (ASSET_VIEWS[v] || {}).title},
+  type:{label:'Asset Type', all:'All types', vals:a => [a.type], name:v => `${typeIcon(v)} ${typeLabel(v)}`},
+  model:{label:'Model', all:'All models', vals:a => [a.modelId], name:v => (model(v) || {}).name},
+  office:{label:'Office', all:'All Offices', vals:a => [assetOfficeId(a)], name:officeLabel},
+  room:{label:'Room', all:'All Rooms', vals:a => [assetRoomId(a)], name:v => room(v) ? roomPath(room(v)) : v},
+  desk:{label:'Desk / Location', all:'All desks', vals:a => [deskOf(a)], name:v => { const k = desk(v); return k ? `${(room(k.roomId) || {}).name || '?'} › ${k.label}` : v; }},
+  person:{label:'Employee', all:'All employees', vals:a => [a.holder.kind === 'person' ? a.holder.id : ''], name:v => (person(v) || {}).name},
+  service:{label:'Service', all:'All Services', vals:a => [a.serviceId, (assetPerson(a) || {}).serviceId], name:serviceName},
+  mode:{label:'Work Mode', all:'All Work Modes', vals:a => [(assetPerson(a) || {}).mode], name:v => `${modeIcon(v)} ${modeName(v)}`},
+  loc:{label:'Assignment', all:'Any assignment', order:Object.keys(LOC_LABEL), vals:a => [a.holder.kind], name:v => LOC_LABEL[v]},
+  status:{label:'Status', all:'All statuses', order:['active', ...Object.keys(STATUS)], vals:a => [a.status, isActiveAsset(a) ? 'active' : ''], name:v => v === 'active' ? 'Active only' : (STATUS[v] || {}).label},
+  cond:{label:'Condition', all:'Any condition', order:['good', 'faulty', 'aged'], vals:a => [isFaulty(a) ? 'faulty' : '', isAged(a) ? 'aged' : '', !isFaulty(a) && !isAged(a) ? 'good' : ''], name:v => ({good:'Working, not aged', faulty:'Faulty / In Repair', aged:'Aged'})[v]},
+  warr:{label:'Warranty', all:'Warranty: all', order:['soon', 'bad', 'none', 'ok'], vals:a => [warrState(a)], name:v => ({...WARR_TEXT, ok:'Valid'})[v]},
+  project:{label:'Project', all:'All projects', vals:a => [(reservedBy(a.id) || {project:{}}).project.id, ...db.projects.filter(pr => pr.shipments.some(s => s.status !== 'Received' && s.assetIds.includes(a.id))).map(pr => pr.id)], name:v => (project(v) || {}).name},
+};
+const WARR_TEXT = {soon:'Expires within 60 days', bad:'Expired', none:'Not set'}, HEALTH_TEXT = {faulty:'Faulty', aged:'Aged', both:'Faulty and Aged'};
+// what is always applied: the location selection, the search text and the Faulty / Aged sub-filters
+function assetBase(P){
   const f = k => P.get(k) || '';
   let list = scopedAssets(f('view') === 'transit');
-  const v = ASSET_VIEWS[f('view')];
-  if (v) list = list.filter(v.test);
-  if (f('type')) list = list.filter(a => a.type === f('type'));
-  if (f('model')) list = list.filter(a => a.modelId === f('model'));
-  if (f('loc')) list = list.filter(a => a.holder.kind === f('loc'));
-  if (f('status')) list = list.filter(f('status') === 'active' ? isActiveAsset : a => a.status === f('status'));
-  if (f('service')) list = list.filter(a => assetServiceIs(a, f('service')));
-  if (f('office')) list = list.filter(a => assetOfficeId(a) === f('office'));
-  if (f('room')) list = list.filter(a => assetRoomId(a) === f('room'));
-  if (f('person')) list = list.filter(a => a.holder.kind === 'person' && a.holder.id === f('person'));
-  if (f('mode')) list = list.filter(a => (assetPerson(a) || {}).mode === f('mode'));
-  if (f('health') === 'faulty') list = list.filter(isFaulty);
-  if (f('health') === 'aged') list = list.filter(isAged);
-  if (f('health') === 'both') list = list.filter(a => isFaulty(a) && isAged(a));
-  if (f('age')) list = list.filter(a => (ageYears(a) ?? -1) >= +f('age'));
-  if (f('warr')) list = list.filter(a => { const w = warranty(a), x = f('warr'); return x === 'none' ? w.days === null : x === 'bad' ? w.days !== null && w.days < 0 : w.days !== null && w.days >= 0 && w.days <= 60; });
+  if (f('view') === 'health'){
+    if (f('health') === 'faulty') list = list.filter(isFaulty);
+    if (f('health') === 'aged') list = list.filter(isAged);
+    if (f('health') === 'both') list = list.filter(a => isFaulty(a) && isAged(a));
+    if (f('age')) list = list.filter(a => (ageYears(a) ?? -1) >= +f('age'));
+  }
   if (f('q')) list = list.filter(a => matchWords([a.tag, a.legacyTag, a.name, modelName(a), typeLabel(a.type), a.serial, a.note, a.supplier, a.orderNo, whereText(a), officeLabel(a.officeId), serviceName(a.serviceId), Object.values(a.custom || {}).join(' ')].join(' '), f('q')));
   return list;
 }
+const ASSET_FILTER_SET = {base:assetBase, defs:ASSET_FACETS};
+const filterAssets = P => facetRun(assetBase(P), ASSET_FACETS, P).list;
 function typeBreak(list, query){
   const chips = sortHu(db.types.map(t => [t, list.filter(a => a.type === t.id).length]).filter(x => x[1]), x => x[0].name);
   const base = query ? query + '&' : '';
   return `<div class="tbreak">${chips.map(([t, n]) => `<a class="tchip" href="#/assets?${base}type=${encodeURIComponent(t.id)}" title="Show ${esc(t.name)}">${t.icon} <b>${n}</b> <span>${esc(t.name)}</span></a>`).join('') || '<span class="muted">No assets</span>'}</div>`;
 }
 
-// ---------- dashboard ----------
-function tileQuery(id){
-  const d = db.settings.dashboard.defaults, p = new URLSearchParams();
-  const set = (k, v) => { if (v) p.set(k, v); };
-  if (id !== 'total') p.set('view', id);
-  if (id !== 'health') p.set('status', 'active');
-  if (id === 'office') set('room', d.officeRoom);
-  if (id === 'assigned'){ set('mode', d.assignedMode); set('service', d.assignedService); }
-  if (id === 'storage') set('type', d.storageType);
-  if (id === 'health') set('health', d.healthCat);
-  return p;
-}
-function dashTile(it){
-  const tile = (href, n, sub = '', extra = '') => `<div class="card tile ${it.size}" data-tile="${it.id}"><a class="tmain" href="${href}"><span class="n">${n}</span><span class="l">${esc(DASH_ITEMS[it.id])} ›</span></a>${sub}${extra}</div>`;
-  if (DASH_BREAKDOWN.includes(it.id)){
-    const P = tileQuery(it.id), list = filterAssets(P), qs = P.toString();
-    let sub = '';
-    if (it.id === 'storage') sub = `<small class="muted">${list.filter(a => a.status === 'ok').length} working and available</small>`;
-    if (it.id === 'health') sub = `<div class="tsplit">
-      <a href="#/assets?view=health&health=faulty">Faulty <b>${list.filter(isFaulty).length}</b></a>
-      <a href="#/assets?view=health&health=aged">Aged <b>${list.filter(isAged).length}</b></a>
-      <a href="#/assets?view=health&health=both">Both <b>${list.filter(a => isFaulty(a) && isAged(a)).length}</b></a></div>`;
-    return tile('#/assets' + (qs ? '?' + qs : ''), list.length, sub, it.breakdown ? typeBreak(list, qs) : '');
-  }
-  if (it.id === 'lost' || it.id === 'missing') return tile('#/assets?status=' + it.id, filterAssets(new URLSearchParams('status=' + it.id)).length);
-  if (it.id === 'faulty') return tile('#/assets?view=health&health=faulty', filterAssets(new URLSearchParams('view=health&health=faulty')).length);
-  if (it.id === 'returns'){ const ids = new Set(scopedAssets(true).map(a => a.id)); return tile('#/assets?view=awaiting', db.returns.filter(r => r.state === 'awaiting' && ids.has(r.assetId)).length); }
-  if (it.id === 'transit') return tile('#/assets?view=transit', filterAssets(new URLSearchParams('view=transit')).length);
-  if (it.id === 'projects') return tile('#/projects?status=active', scopedProjects().filter(isActive).length);
-  if (it.id === 'unsigned') return tile('#/docs?f=wait', scopedDocs().filter(d => !d.fileId).length);
-  return tile('#/docs', scopedPeople().reduce((n, p) => n + uncovered(p.id).length, 0));
-}
-function dashSection(id){
-  if (id === 'warranty'){
-    const list = sortHu(scopedAssets().filter(a => { const w = warranty(a); return w.days !== null && w.days <= 60 && a.status !== 'retired'; }), a => a.warrantyUntil);
-    return list.length ? `<h2>⚠️ Warranty expired or expiring within 60 days (${list.length})</h2>${assetRows(list)}` : '';
-  }
-  if (id === 'models'){
-    const pool = scopedAssets(), list = db.models.map(m => [m, pool.filter(a => a.modelId === m.id).length]).filter(x => x[1]).sort((a, b) => b[1] - a[1]).slice(0, 10);
-    return `<h2>Top models</h2>` + (list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Model</th><th>Type</th><th>Count</th></tr></thead><tbody>${list.map(([m, n]) =>
-      `<tr><td><a href="#/assets?model=${m.id}">${esc(m.name)}</a></td><td><a href="#/assets?type=${encodeURIComponent(m.typeId)}">${typeIcon(m.typeId)} ${esc(typeLabel(m.typeId))}</a></td><td><a href="#/assets?model=${m.id}"><b>${n}</b></a></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">–</div>');
-  }
-  if (id === 'services') return `<h2>By Service</h2><div class="grid">${sortHu(db.services, s => s.name).map(s => { const ppl = scopedPeople().filter(p => p.serviceId === s.id);
-    return `<a class="card stat" href="#/people?service=${s.id}"><div class="n">${ppl.length}</div><div class="l">🧩 ${esc(s.name)} · ${db.modes.map(m => `${m.icon}${ppl.filter(p => p.mode === m.id).length}`).join(' ')}</div></a>`; }).join('') || '<div class="empty">No Services yet – create them in Settings.</div>'}</div>`;
-  if (id === 'remote'){
-    const list = sortHu(scopedPeople().filter(p => modeBehavior(p.mode) !== 'onsite'), p => p.name);
-    return `<h2>WFH / Hybrid people</h2>` + (list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Service</th><th>Work Mode</th><th>Assets</th></tr></thead><tbody>${list.map(p =>
-      `<tr><td>${personLink(p.id)}</td><td>${esc(serviceName(p.serviceId))}</td><td>${modePill(p.mode)}</td><td>${personAssets(p.id).direct.map(a => `<a class="chip" href="#/asset/${a.id}">${typeIcon(a.type)} ${esc(a.tag)}</a>`).join(' ') || '<span class="muted">–</span>'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Nobody in these modes.</div>');
-  }
-  if (id === 'activeList'){
-    const list = sortHu(scopedProjects().filter(isActive), pr => pr.pickupDate || '9999');
-    return `<h2>Active Projects (${list.length})</h2>` + (list.length ? `<div class="tbl-wrap"><table><thead><tr><th>Project Name</th><th>Status</th><th>Project Owner</th><th>Progress</th></tr></thead><tbody>${list.slice(0, 8).map(pr => { const n = projectProgress(pr);
-      return `<tr><td><a href="#/project/${pr.id}">${esc(pr.name)}</a></td><td>${projectStatusPill(pr.status)}</td><td>${esc(pr.owner) || '<span class="muted">–</span>'}</td><td data-v="${n}"><div class="progress" title="${n}%"><i style="width:${n}%"></i></div><small class="muted">${n}%</small></td></tr>`; }).join('')}</tbody></table></div>${list.length > 8 ? '<p><a href="#/projects?status=active">All active projects ›</a></p>' : ''}` : '<div class="empty">No active projects.</div>');
-  }
-  if (id === 'awaitList'){
-    // only real return records count: being assigned to a person does not mean an asset is expected back
-    const ids = new Set(scopedAssets(true).map(a => a.id)), by = new Map();
-    for (const r of db.returns) if (r.state === 'awaiting' && ids.has(r.assetId)) by.set(r.personId, [...(by.get(r.personId) || []), r]);
-    const rows = sortHu([...by], ([pid]) => (person(pid) || {}).name || '');
-    return `<h2>Awaiting Returns (${rows.length})</h2>` + (rows.length ? `<div class="tbl-wrap"><table><thead><tr><th>Person</th><th>Assets</th><th>Summary</th><th>Return State</th></tr></thead><tbody>${rows.map(([pid, rs]) => {
-      const as = rs.map(r => asset(r.assetId)).filter(Boolean), late = rs.some(returnOverdue), due = rs.map(returnDue).filter(Boolean).sort()[0];
-      return `<tr><td>${personLink(pid)}</td><td><a href="#/assets?view=awaiting&person=${pid}"><b>${as.length}</b></a></td><td>${as.map(a => `<a class="chip" href="#/asset/${a.id}" title="${esc(assetName(a))}">${typeIcon(a.type)} ${esc(a.tag)}</a>`).join(' ')}</td>
-        <td><span class="pill ${late ? 'bad' : due ? 'warn' : ''}">${late ? 'Overdue' : 'Awaiting Return'}</span> <small class="muted">${due ? 'due ' + esc(due) : 'No deadline set'}</small></td></tr>`; }).join('')}</tbody></table></div>` : '<div class="empty">No returns are expected.</div>');
-  }
-  if (id === 'equip'){
-    // only assets held by a person directly; stock and office assets are not anyone's equipment
-    const rows = scopedPeople().map(p => [p, personAssets(p.id).direct]).filter(x => x[1].length).sort((a, b) => b[1].length - a[1].length || String(a[0].name).localeCompare(b[0].name, 'hu'));
-    return `<h2>Equipment by Person (${rows.length})</h2>` + (rows.length ? `<div class="tbl-wrap"><table><thead><tr><th>Person</th><th>Service</th><th>In Use</th><th>Needs Attention</th></tr></thead><tbody>${rows.slice(0, 10).map(([p, as]) => {
-      const inUse = as.filter(isActiveAsset), bad = as.filter(a => !isActiveAsset(a)), types = [...new Set(inUse.map(a => a.type))];
-      return `<tr><td>${personLink(p.id)}</td><td>${esc(serviceName(p.serviceId)) || '<span class="muted">–</span>'}</td>
-        <td data-v="${inUse.length}">${types.map(t => `<a class="tchip" href="#/assets?person=${p.id}&type=${encodeURIComponent(t)}" title="${esc(typeLabel(t))}">${typeIcon(t)} <b>${inUse.filter(a => a.type === t).length}</b> <span>${esc(typeLabel(t))}</span></a>`).join(' ') || '<span class="muted">–</span>'}</td>
-        <td data-v="${bad.length}">${bad.map(a => `<a href="#/asset/${a.id}" title="${esc(a.tag)}">${statusPill(a.status)}</a>`).join(' ') || '<span class="muted">–</span>'}</td></tr>`; }).join('')}</tbody></table></div>${rows.length > 10 ? `<p><a href="#/assets?view=assigned">All ${rows.length} people's assets ›</a></p>` : ''}` : '<div class="empty">Nobody holds an asset directly.</div>');
-  }
-  if (id === 'moves') return `<h2>Recent Asset Movements</h2>${logTable(scopedLog().filter(l => ['moved', 'checkout', 'returned'].includes(l.cat)).slice(0, 8))}`;
-  return `<h2>Recent events</h2>${logTable(scopedLog().slice(0, 8))}`;
-}
-// the admin's Settings decide the default; each account can show or hide widgets for itself
-const dashShown = it => { const o = (myPrefs().dash || {})[it.id]; return o === undefined ? it.visible : o; };
-function customizeOverview(){
-  const items = db.settings.dashboard.items;
-  openDialog(`<h3>Customize Overview</h3><p class="muted" style="margin-top:0">Choose what you see. This applies to your account only.</p>
-    <div class="cfg-grid">${items.map(i => `<label class="cb"><input type="checkbox" name="w_${i.id}"${dashShown(i) ? ' checked' : ''}> ${esc(DASH_ITEMS[i.id])}</label>`).join('')}</div>
-    <div class="actions"><button type="button" id="dashReset" style="margin-right:auto">Reset to default</button><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok" id="dlgOk">Save</button></div>`,
-    data => { myPrefs().dash = Object.fromEntries(items.map(i => [i.id, !!data['w_' + i.id]])); save(); render(); });
-  $('#dashReset').addEventListener('click', () => { delete myPrefs().dash; save(); $('#dlg').close(); render(); toast('Overview reset to the default.'); });
-}
-function viewDashboard(){
-  const items = db.settings.dashboard.items.filter(dashShown);
-  return `<div class="row"><h1>Overview</h1><span class="spacer"></span><button class="sm" onclick="customizeOverview()">⚙ Customize Overview</button><a class="btn sm" href="#/settings/dashboard">Default layout</a></div>
-    <div class="sub">The state of all IT assets at a glance. Click a number to open the filtered list.</div>
-    <div class="dash">${items.filter(i => !DASH_SECTIONS.includes(i.id)).map(dashTile).join('')}</div>
-    ${items.filter(i => DASH_SECTIONS.includes(i.id)).map(i => dashSection(i.id)).join('')}`;
-}
-
 // ---------- asset list ----------
-const LOC_LABEL = {desk:'🪑 On a desk / in a rack', office:'🏢 In a room pool', site:'🏢 At an office, not placed', transit:'🚚 In transit', person:'👤 Assigned to a person', storage:'📦 In Stock'};
-const ASSET_FILTERS = {view:'View', type:'Asset Type', model:'Model', office:'Office', room:'Room', person:'Employee', service:'Service', mode:'Work Mode', loc:'Location', status:'Status', warr:'Warranty'};
+const ASSET_FILTERS = Object.fromEntries(Object.entries(ASSET_FACETS).map(([k, f]) => [k, f.label]));
 const DEFAULT_FILTERS = ['type', 'office', 'person', 'status'];
 const shownFilters = () => myPrefs().filters || DEFAULT_FILTERS;
 const shownCols = () => (myPrefs().cols || DEFAULT_COLS).filter(c => ASSET_COLS[c]);
 const ASSETS_SORT = 'assets#0';
-const WARR_TEXT = {soon:'Expires within 60 days', bad:'Expired', none:'Not set'}, HEALTH_TEXT = {faulty:'Faulty', aged:'Aged', both:'Faulty and Aged'};
 function filterValue(k, v){
-  return {view:() => (ASSET_VIEWS[v] || {}).title, type:() => typeLabel(v), model:() => (model(v) || {}).name, office:() => officeLabel(v), room:() => (room(v) || {}).name, person:() => (person(v) || {}).name, service:() => serviceName(v),
-    mode:() => modeName(v), loc:() => LOC_LABEL[v], status:() => v === 'active' ? 'Active only' : (STATUS[v] || {}).label, warr:() => WARR_TEXT[v], health:() => HEALTH_TEXT[v], age:() => v + '+ years'}[k]?.() || v;
+  if (ASSET_FACETS[k]) return facetLabel(ASSET_FACETS[k], v);
+  return {health:() => HEALTH_TEXT[v], age:() => v + '+ years'}[k]?.() || v;
 }
-// every active filter is listed here, also the ones hidden in Customize View, so nothing narrows the list unseen
-function activeFilterChips(params){
-  const shown = shownFilters(), out = [];
+// every active filter is listed, also the hidden ones and the ones that no longer match, so nothing narrows the list unseen
+function activeFilterChips(params, route = '#/assets', facets = ASSET_FACETS, shown = shownFilters(), counts = {}){
+  const out = [];
   for (const [k, v] of params){
     if (k === 'q') continue;
-    const hidden = ASSET_FILTERS[k] && !shown.includes(k), rest = new URLSearchParams(params); rest.delete(k);
+    const hidden = facets[k] && !shown.includes(k), stale = counts[k] && !counts[k].get(v), rest = new URLSearchParams(params); rest.delete(k);
     if (k === 'view'){ rest.delete('health'); rest.delete('age'); }
-    out.push(`<a class="fchip${hidden ? ' hid' : ''}" href="#/assets${rest.toString() ? '?' + rest : ''}" title="${hidden ? 'This filter is hidden in Customize View but still applied. ' : ''}Click to remove">${esc(ASSET_FILTERS[k] || {health:'Category', age:'Age'}[k] || k)}: <b>${esc(filterValue(k, v))}</b>${hidden ? ' <small>(hidden filter)</small>' : ''} ✕</a>`);
+    out.push(`<a class="fchip${hidden ? ' hid' : ''}${stale ? ' stale' : ''}" href="${route}${rest.toString() ? '?' + rest : ''}" title="${hidden ? 'This filter is hidden in Customize View but still applied. ' : ''}${stale ? 'Nothing matches this together with the other filters. ' : ''}Click to remove">${esc((facets[k] || {}).label || {health:'Category', age:'Age', from:'Date from', to:'Date to'}[k] || k)}: <b>${esc(facets === ASSET_FACETS ? filterValue(k, v) : facets[k] ? facetLabel(facets[k], v) : v)}</b>${hidden ? ' <small>(hidden filter)</small>' : ''}${stale ? ' <small>(no match)</small>' : ''} ✕</a>`);
   }
-  return out.length ? `<div class="row fchiprow"><span class="muted">Active filters:</span>${out.join('')}<a href="#/assets">Clear all</a></div>` : '';
+  return out.length ? `<div class="row fchiprow"><span class="muted">Active filters:</span>${out.join('')}<a href="${route}">Clear all filters</a></div>` : '';
 }
 function builtinViews(){
   const p = currentPerson();
@@ -169,7 +87,7 @@ function customizeView(){
   const views = () => (myPrefs().views || []).map(v => `<div class="locrow"><span>${esc(v.name)}</span><button type="button" class="sm danger" data-delview="${v.id}">Delete</button></div>`).join('') || '<p class="muted">No saved views yet.</p>';
   openDialog(`<h3>Customize View</h3>
     <h4>Search Filters</h4><div class="cfg-grid">${Object.entries(ASSET_FILTERS).map(([k, l]) => `<label class="cb"><input type="checkbox" data-filter="${k}"${filters.includes(k) ? ' checked' : ''}> ${esc(l)}</label>`).join('')}</div>
-    <h4>Table Columns</h4><p class="muted" style="margin:0 0 6px">Only the display changes, never the asset data. Use the arrows to change the order.</p>
+    <h4>Table Columns</h4><p class="muted" style="margin:0 0 6px">Only the display changes, never the asset data. Use the arrows to change the order. Widths are set by dragging the column edge in the table.</p>
     <div class="checklist" id="cvCols">${order.map(c => `<div class="cvcol" data-col="${c}"><label class="cb"><input type="checkbox"${cols.includes(c) ? ' checked' : ''}> ${esc(ASSET_COLS[c].label)}</label><span class="spacer"></span><button type="button" class="sm" data-up aria-label="Move ${esc(ASSET_COLS[c].label)} up">↑</button><button type="button" class="sm" data-down aria-label="Move ${esc(ASSET_COLS[c].label)} down">↓</button></div>`).join('')}</div>
     <h4>Saved Views</h4><p class="muted" style="margin:0 0 6px">A saved view keeps the current filters, the columns chosen here, their order and the sorting.</p>
     <div id="cvViews">${views()}</div>
@@ -188,7 +106,7 @@ function customizeView(){
     if ('up' in e.target.dataset && d.previousElementSibling) d.parentNode.insertBefore(d, d.previousElementSibling);
     if ('down' in e.target.dataset && d.nextElementSibling) d.parentNode.insertBefore(d.nextElementSibling, d);
   });
-  $('#cvReset').addEventListener('click', () => { const p = myPrefs(); delete p.filters; delete p.cols; delete sortState[ASSETS_SORT]; save(); $('#dlg').close(); render(); toast('Filters and columns reset to the defaults.'); });
+  $('#cvReset').addEventListener('click', () => { const p = myPrefs(); delete p.filters; delete p.cols; delete p.assetColW; delete sortState[ASSETS_SORT]; save(); $('#dlg').close(); render(); toast('Filters and columns reset to the defaults.'); });
   $('#cvSave').addEventListener('click', () => {
     const name = $('#cvName').value.trim(), cs = readCols(), p = myPrefs();
     if (!name){ alert('Enter a name for the view.'); return; }
@@ -202,28 +120,27 @@ function customizeView(){
     const p = myPrefs(); p.views = p.views.filter(v => v.id !== id); save(); $('#cvViews').innerHTML = views();
   });
 }
+// paging state: back to page 1 whenever the filters change
+const assetPg = {key:'', page:1};
+function sortAssets(list){
+  const cols = shownCols(), s = (sortState[ASSETS_SORT] || []).map(x => ({f:ASSET_SORT[cols[x.i - 2]], dir:x.dir})).filter(x => x.f);
+  const out = sortHu(list, a => a.tag);
+  if (!s.length) return out;
+  return out.map((a, n) => [a, n]).sort(([a, x], [b, y]) => { for (const c of s){ const r = String(c.f(a) ?? '').localeCompare(String(c.f(b) ?? ''), 'en', {numeric:true, sensitivity:'base'}); if (r) return r * c.dir; } return x - y; }).map(x => x[0]);
+}
 function viewAssets(params){
   const f = k => params.get(k) || '';
-  const list = sortHu(filterAssets(params), a => a.tag), V = ASSET_VIEWS[f('view')], type = f('type'), mdl = f('model');
-  const filtered = [...params.keys()].length > 0, all = scopedAssets(), offs = sortHu(db.offices.filter(o => scopeOfficeIds().includes(o.id)), o => o.name);
-  const models = sortHu(db.models.filter(m => !type || m.typeId === type), m => m.name);
+  const run = facetRun(assetBase(params), ASSET_FACETS, params), list = sortAssets(run.list), V = ASSET_VIEWS[f('view')], type = f('type'), mdl = f('model');
+  const filtered = [...params.keys()].length > 0, all = scopedAssets();
   const title = V ? V.title : mdl && model(mdl) ? model(mdl).name : type ? typeLabel(type) : 'Assets';
   const opt = (v, cur, l) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${l}</option>`;
   const q = new URLSearchParams(params); q.delete('type'); q.delete('model');
   const saved = [...builtinViews(), ...(myPrefs().views || [])];
-  const selects = {
-    view:`<select id="fview" title="View" aria-label="View"><option value="">All assets</option>${Object.entries(ASSET_VIEWS).map(([k, x]) => opt(k, f('view'), x.title)).join('')}</select>`,
-    type:`<select id="ftype" title="Asset Type" aria-label="Asset Type"><option value="">All types</option>${sortHu(db.types, t => t.name).map(t => opt(t.id, type, `${t.icon} ${esc(t.name)}`)).join('')}</select>`,
-    model:`<select id="fmodel" title="Model" aria-label="Model"><option value="">All models</option>${models.map(m => opt(m.id, mdl, esc(m.name))).join('')}</select>`,
-    office:`<select id="foffice" title="Office" aria-label="Office"><option value="">All Offices</option>${offs.map(o => opt(o.id, f('office'), esc(o.name))).join('')}</select>`,
-    room:`<select id="froom" title="Room" aria-label="Room"><option value="">All Rooms</option>${sortHu(db.rooms.filter(r => offs.some(o => o.id === r.officeId) && (!f('office') || r.officeId === f('office'))), r => roomPath(r)).map(r => opt(r.id, f('room'), esc(roomPath(r)))).join('')}</select>`,
-    person:`<select id="fperson" title="Employee" aria-label="Employee"><option value="">All employees</option>${sortHu(scopedPeople(), p => p.name).map(p => opt(p.id, f('person'), esc(p.name))).join('')}</select>`,
-    service:`<select id="fsvc" title="Service" aria-label="Service"><option value="">All Services</option>${sortHu(db.services, s => s.name).map(s => opt(s.id, f('service'), esc(s.name))).join('')}</select>`,
-    mode:`<select id="fmode" title="Work Mode" aria-label="Work Mode"><option value="">All Work Modes</option>${db.modes.map(m => opt(m.id, f('mode'), `${m.icon} ${esc(m.name)}`)).join('')}</select>`,
-    loc:`<select id="floc" title="Location" aria-label="Location"><option value="">Anywhere</option>${Object.entries(LOC_LABEL).map(([k, v]) => opt(k, f('loc'), v)).join('')}</select>`,
-    status:`<select id="fstatus" title="Status" aria-label="Status"><option value="">All statuses</option>${opt('active', f('status'), 'Active only')}${Object.entries(STATUS).map(([k, s]) => opt(k, f('status'), s.label)).join('')}</select>`,
-    warr:`<select id="fwarr" title="Warranty" aria-label="Warranty"><option value="">Warranty: all</option>${opt('soon', f('warr'), WARR_TEXT.soon)}${opt('bad', f('warr'), WARR_TEXT.bad)}${opt('none', f('warr'), WARR_TEXT.none)}</select>`,
-  };
+  const key = params.toString();
+  if (assetPg.key !== key){ assetPg.key = key; assetPg.page = 1; }
+  const size = myPrefs().pageSize || 20, pages = Math.max(1, Math.ceil(list.length / size));
+  assetPg.page = Math.min(Math.max(1, assetPg.page), pages);
+  const page = list.slice((assetPg.page - 1) * size, assetPg.page * size);
   return `
     <div class="row"><h1>${!V && type ? typeIcon(type) + ' ' : ''}${esc(title)}</h1><span class="spacer"></span>
       <button onclick="scanDialog()">📷 Scan QR Code</button>
@@ -235,12 +152,12 @@ function viewAssets(params){
     ${V ? typeBreak(filterAssets(q), q.toString()) : ''}
     <div class="row filters" style="margin-bottom:12px">
       <input id="fq" type="search" placeholder="Search: Asset ID, name, S/N, model, person…" value="${esc(f('q'))}" aria-label="Search assets" style="min-width:260px;flex:1">
-      ${Object.keys(ASSET_FILTERS).filter(k => shownFilters().includes(k)).map(k => selects[k]).join('')}
+      ${Object.keys(ASSET_FACETS).filter(k => shownFilters().includes(k)).map(k => facetSelect(k, ASSET_FACETS[k], run.counts, f(k))).join('')}
       <select id="fsaved" title="Saved views" aria-label="Saved views"><option value="">Saved views…</option>${saved.map(v => `<option value="${v.id}">${esc(v.name)}</option>`).join('')}</select>
       ${f('view') === 'health' ? `<select id="fhealth" title="Category"><option value="">Faulty or Aged</option>${opt('faulty', f('health'), 'Faulty')}${opt('aged', f('health'), 'Aged')}${opt('both', f('health'), 'Faulty and Aged')}</select>
       <select id="fage" title="Minimum age"><option value="">Any age</option>${[3, 4, 5, 6, 7, 8, 10].map(y => opt(String(y), f('age'), `${y}+ years`)).join('')}</select>` : ''}
     </div>
-    ${activeFilterChips(params)}
+    ${activeFilterChips(params, '#/assets', ASSET_FACETS, shownFilters(), run.counts)}
     <div class="bulkbar" id="bulkbar" hidden>
       <b>✔ <span class="bulkCount">0</span> selected</b>
       <button class="primary" data-bulk="assign" onclick="assignWizard()">Assign Selected Assets</button>
@@ -250,24 +167,25 @@ function viewAssets(params){
       <button onclick="bulkStatus()">Set</button>
       <span class="spacer"></span><button class="sm" onclick="selected.clear(); render()">✕ Clear selection</button>
     </div>
-    ${assetRows(list, {select:true, cols:shownCols()})}`;
+    ${list.length ? assetRows(page, {select:true, cols:shownCols(), rowActions:true, dataSort:true, widthsKey:'assetColW', widths:myPrefs().assetColW}) + pager(list.length, assetPg.page, size, 'assets') : '<div class="empty">No assets match these filters.</div>'}`;
 }
 function bindAssetFilters(){
-  const ids = {q:'#fq', view:'#fview', type:'#ftype', model:'#fmodel', office:'#foffice', room:'#froom', person:'#fperson', service:'#fsvc', mode:'#fmode', loc:'#floc', status:'#fstatus', warr:'#fwarr', health:'#fhealth', age:'#fage'};
-  const upd = () => {
-    // a hidden filter has no control on the page, so its value is kept from the address
-    const p = new URLSearchParams(location.hash.split('?')[1] || '');
-    for (const [k, sel] of Object.entries(ids)) if ($(sel)){ if ($(sel).value) p.set(k, $(sel).value); else p.delete(k); }
-    if (p.get('view') !== 'health'){ p.delete('health'); p.delete('age'); }
-    if (p.get('room') && p.get('office') && (room(p.get('room')) || {}).officeId !== p.get('office')) p.delete('room');
-    // a model that does not belong to the newly chosen type is dropped
-    if (p.get('model') && p.get('type') && (model(p.get('model')) || {}).typeId !== p.get('type')) p.delete('model');
-    history.replaceState(null, '', '#/assets' + (p.toString() ? '?' + p : ''));
-    const pos = $('#fq').selectionStart; render(); $('#fq').focus(); $('#fq').setSelectionRange(pos, pos);
+  // a hidden filter has no control on the page, so its value is kept from the address
+  const upd = changed => {
+    const view = $('[data-facet=view]') ? $('[data-facet=view]').value : new URLSearchParams(location.hash.split('?')[1] || '').get('view');
+    facetUpdate('#/assets', ASSET_FILTER_SET, changed, {q:$('#fq').value, health:view === 'health' && $('#fhealth') ? $('#fhealth').value : '', age:view === 'health' && $('#fage') ? $('#fage').value : ''});
+    const pos = $('#fq').selectionStart, typing = document.activeElement === $('#fq');
+    render(); if (typing){ $('#fq').focus(); $('#fq').setSelectionRange(pos, pos); }
   };
-  $('#fq').addEventListener('input', upd);
-  for (const s of Object.values(ids).slice(1)) if ($(s)) $(s).addEventListener('change', upd);
+  $('#fq').addEventListener('input', () => upd('q'));
+  document.querySelectorAll('#view [data-facet]').forEach(s => s.addEventListener('change', () => upd(s.dataset.facet)));
+  for (const s of ['#fhealth', '#fage']) if ($(s)) $(s).addEventListener('change', () => upd(''));
   $('#fsaved').addEventListener('change', e => applySavedView(e.target.value));
+  const pg = document.querySelector('[data-pager=assets]');
+  if (pg){
+    pg.addEventListener('click', e => { const b = e.target.closest('[data-page]'); if (b && !b.disabled){ assetPg.page = +b.dataset.page; render(); } });
+    pg.querySelector('[data-pagesize]').addEventListener('change', e => { myPrefs().pageSize = +e.target.value; assetPg.page = 1; save(); render(); });
+  }
 }
 
 // ---------- assignment and return: one rule set for every screen ----------
@@ -567,9 +485,16 @@ function moveDialog(id){
     save(); $('#dlg').close(); render(); toast(`${a.tag} moved: ${targetLabel(t)}`);
   });
 }
-function deleteAsset(id){
+async function deleteAsset(id){
   const a = asset(id);
-  if (!confirm(`Delete ${a.tag}?\nThe Asset ID will not be reused. (To scrap an asset, set its status to “Retired” instead.)`)) return;
+  if (!a) return;
+  const res = reservedBy(id), ret = openReturnOf(id), docs = db.docs.filter(d => d.items.some(i => i.assetId === id)).length;
+  if (a.holder.kind === 'transit' || inOpenShipment(id)){ alert(`${a.tag} is part of a shipment. Finish or remove the shipment first.`); return; }
+  const ok = await askConfirm('Delete asset', `<p>Delete <b class="tag">${esc(a.tag)}</b> ${esc(assetName(a))}? This cannot be undone.</p>
+    <ul><li>The Asset ID is never given out again.</li>${a.holder.kind === 'person' ? `<li>It is assigned to ${esc((assetPerson(a) || {}).name || '?')}; that assignment ends.</li>` : ''}
+    ${res ? `<li>It is removed from project “${esc(res.project.name)}”.</li>` : ''}${ret ? '<li>The expected return is cancelled.</li>' : ''}${docs ? `<li>${docs} document(s) keep their own copy of its data.</li>` : ''}</ul>
+    <p class="muted">To scrap an asset but keep its history, set its status to “Retired” instead.</p>`, 'Delete asset');
+  if (!ok) return;
   for (const pr of db.projects){
     for (const x of pr.participants){
       if (x.computerId === id) x.computerId = null; if (x.monitorId === id) x.monitorId = null; if (x.monitor2Id === id) x.monitor2Id = null;
@@ -579,7 +504,19 @@ function deleteAsset(id){
   }
   for (const r of db.returns) if (r.assetId === id && r.state === 'awaiting') r.state = 'cancelled';
   log(id, `Deleted: ${a.tag} (${modelName(a)})`, 'updated');
-  db.assets = db.assets.filter(x => x.id !== id); save(); location.hash = '#/assets';
+  selected.delete(id);
+  db.assets = db.assets.filter(x => x.id !== id); save();
+  if (location.hash.startsWith('#/asset/')) location.hash = '#/assets'; else render();
+  toast(`${a.tag} deleted.`);
+}
+// a copy for a new asset: same type, model, purchase data and custom fields; never the Asset ID, Serial Number or a unique name
+function duplicateAsset(id){ const a = asset(id); if (a) assetForm(null, null, a.type, a); }
+// unique values, checked when saving: an unchanged value of an existing asset is never treated as a new conflict
+function uniqueErrors(f, self){
+  const out = [], same = (x, y) => norm(x) === norm(y), others = db.assets.filter(x => !self || x.id !== self.id);
+  if (f.serial && !(self && same(self.serial, f.serial))){ const o = others.find(x => x.serial && same(x.serial, f.serial)); if (o) out.push(`Serial Number “${f.serial}” is already used by ${o.tag}.`); }
+  if (f.name && !(self && same(self.name, f.name))){ const o = others.find(x => x.name && same(x.name, f.name)); if (o) out.push(`Asset Name “${f.name}” is already used by ${o.tag}.`); }
+  return out;
 }
 
 // ---------- asset page ----------
@@ -676,17 +613,18 @@ function modelOptions(typeId, cur){
   return sortHu(db.models.filter(m => m.typeId === typeId), m => m.name).map(m => `<option value="${m.id}"${m.id === cur ? ' selected' : ''}>${esc(m.name)}</option>`).join('') +
     '<option value="__new">＋ New model…</option>';
 }
-function assetForm(a, presetHolder, presetType){
-  const isNew = !a;
+function assetForm(a, presetHolder, presetType, copyFrom){
+  const isNew = !a, src = copyFrom || null;
   const t0 = presetType && db.types.some(t => t.id === presetType) ? presetType : 'monitor';
-  const newOffice = scope.officeId || scopeOfficeIds()[0];
-  a = a || {officeId:newOffice, type:t0, name:'', modelId:'', serial:'', status:'ok', holder:presetHolder || {kind:'storage'}, serviceId:null, custom:{}, note:'',
-    arrived:todayIso(), warrantyUntil:'', supplier:'', orderNo:'', legacyTag:''};
+  const newOffice = src && scopeOfficeIds().includes(src.officeId) ? src.officeId : scope.officeId || scopeOfficeIds()[0];
+  a = a || {officeId:newOffice, type:t0, name:'', modelId:src ? src.modelId : '', serial:'', status:'ok', holder:presetHolder || {kind:'storage'}, serviceId:src ? src.serviceId : null, custom:src ? JSON.parse(JSON.stringify(src.custom || {})) : {}, note:src ? src.note : '',
+    arrived:src ? src.arrived : todayIso(), warrantyUntil:src ? src.warrantyUntil : '', supplier:src ? src.supplier : '', orderNo:src ? src.orderNo : '', legacyTag:''};
   const preview = fmtAssetId(Math.max(db.seq.asset || 0, ...db.assets.map(x => assetNum(x.tag)), 0) + 1);
   const curImg = assetImg(a);
   let pendingImg = null, custom = {...a.custom}, curType = a.type;
   openDialog(`
-    <h3>${isNew ? 'New asset' : 'Edit asset'}</h3>
+    <h3>${src ? `Duplicate asset <small class="muted">(from ${esc(src.tag)})</small>` : isNew ? 'New asset' : 'Edit asset'}</h3>
+    ${src ? '<div class="warnbox">The copy gets a new Asset ID. Serial Number, Legacy ID and any own Asset Name are left empty because they must be unique. Check the values, then save.</div>' : ''}
     ${isNew ? `<label class="f">Country / Office *</label><select name="officeId" id="fOffice">${sortHu(db.offices.filter(o => scopeOfficeIds().includes(o.id)), o => o.name).map(o => `<option value="${o.id}"${o.id === a.officeId ? ' selected' : ''}>${esc(officeCountry(o.id).name)} · ${esc(o.name)}</option>`).join('')}</select>`
       : `<p class="muted">Location: ${esc(officeCountry(a.officeId).name || '–')} · ${esc(officeLabel(a.officeId))} <small>(changes through a Shipment)</small></p>`}
     <div class="two">
@@ -695,8 +633,11 @@ function assetForm(a, presetHolder, presetType){
       <div><label class="f">Asset Type</label><select name="type" id="fType">${sortHu(db.types, t => t.name).map(t => `<option value="${esc(t.id)}"${t.id === a.type ? ' selected' : ''}>${t.icon} ${esc(t.name)}</option>`).join('')}</select></div>
       <div><label class="f">Model</label><select name="modelId" id="fModel">${modelOptions(a.type, a.modelId)}</select>
         <input name="newModel" id="fNewModel" placeholder="New model name, e.g. Dell P2422H" style="display:none;margin-top:4px"></div>
-      <div><label class="f" id="fNameLbl">Asset Name</label><input name="name" id="fName" value="${esc(a.name || '')}"></div>
-      <div><label class="f">Serial Number</label><input name="serial" value="${esc(a.serial)}"></div>
+      <div><label class="f" id="fNameLbl">Asset Name</label><input name="name" id="fName" value="${esc(a.name || '')}" aria-describedby="fUniq"></div>
+      <div><label class="f">Serial Number</label><input name="serial" id="fSerial" value="${esc(a.serial)}" aria-describedby="fUniq"></div>
+    </div>
+    <div id="fUniq" class="errbox" role="alert" hidden></div>
+    <div class="two">
       <div><label class="f">Status</label><select name="status">${Object.entries(STATUS).map(([k, s]) => `<option value="${k}"${k === a.status ? ' selected' : ''}>${s.label}</option>`).join('')}</select></div>
       <div><label class="f">Service (optional)</label><select name="serviceId">${selOpts(sortHu(db.services, s => s.name), a.serviceId, s => s.name, '–')}</select></div>
     </div>
@@ -720,6 +661,9 @@ function assetForm(a, presetHolder, presetType){
     <label class="f">Note</label><textarea name="note" style="width:100%">${esc(a.note)}</textarea>
     ${dlgActions(isNew ? 'Create' : 'Save')}`,
     (data, form) => {
+      // unique values are checked here, at saving, whatever the live hint said
+      const uq = uniqueErrors({serial:data.serial.trim(), name:data.name.trim()}, isNew ? null : a);
+      if (uq.length){ alert(uq.join('\n') + '\n\nNothing was saved.'); return false; }
       let modelId = data.modelId;
       if (modelId === '__new'){
         const nm = (data.newModel || '').trim();
@@ -731,11 +675,8 @@ function assetForm(a, presetHolder, presetType){
       const newCustom = readCustom(data.type, form, custom);
       const t = typeOf(data.type), name = data.name.trim();
       if (isNew && t.nameRule === 'custom' && !name){ alert(`Asset Name is required for ${t.name}.`); return false; }
-      if (t.nameUnique && name && db.assets.some(x => x.id !== a.id && x.type === data.type && norm(x.name) === norm(name))){ alert(`Asset Name “${name}” is already used by another ${t.name}.`); return false; }
       const fields = {type:data.type, name, modelId, serial:data.serial.trim(), status:data.status, serviceId:data.serviceId || null, note:data.note,
         arrived:data.arrived, warrantyUntil:data.warrantyUntil, supplier:data.supplier.trim(), orderNo:data.orderNo.trim(), legacyTag:data.legacyTag.trim(), custom:newCustom};
-      if (fields.serial && db.assets.some(x => x.id !== a.id && x.serial && norm(x.serial) === norm(fields.serial)) &&
-        !confirm(`An asset with serial number ${fields.serial} already exists. Save anyway?`)) return false;
       let target = a;
       if (isNew){
         const nh = parseHolder(data.holder);
@@ -764,6 +705,9 @@ function assetForm(a, presetHolder, presetType){
     });
   const syncName = () => { const c = typeOf($('#fType').value).nameRule === 'custom'; $('#fNameLbl').textContent = c ? 'Asset Name *' : 'Asset Name'; $('#fName').placeholder = c ? 'e.g. computer name' : 'Empty = uses the Model Name'; };
   syncName(); $('#fType').addEventListener('change', syncName);
+  // a hint while typing; the save itself checks again
+  const liveUniq = () => { const e = uniqueErrors({serial:$('#fSerial').value.trim(), name:$('#fName').value.trim()}, isNew ? null : a); $('#fUniq').hidden = !e.length; $('#fUniq').textContent = e.join(' '); $('#dlgOk').disabled = !!e.length; };
+  $('#fSerial').addEventListener('input', liveUniq); $('#fName').addEventListener('input', liveUniq);
   if (isNew) $('#fOffice').addEventListener('change', e => { const s = $('#dlgForm').elements.holder; s.innerHTML = holderOptions('storage', {officeId:e.target.value}); });
   const syncModel = () => { $('#fNewModel').style.display = $('#fModel').value === '__new' ? '' : 'none'; };
   $('#fModel').addEventListener('change', syncModel);
@@ -1012,7 +956,9 @@ function resolveType(v, mdl){
 function parseStatus(v){
   const n = norm(v);
   if (!n) return '';
-  if (/javit|repair|broken|hibas/.test(n)) return 'repair';
+  if (/javit|repair/.test(n)) return 'repair';
+  if (/faulty|defect|broken|hibas/.test(n)) return 'faulty';
+  if (/missing|hianyz/.test(n)) return 'missing';
   if (/lost|stolen|elvesz|lopott/.test(n)) return 'lost';
   if (/archiv|retire|selejt|dispos/.test(n)) return 'retired';
   return 'ok';
@@ -1050,6 +996,7 @@ function resolveHolder(text, email, loc){
   return {h:{kind:'storage'}, unknown:text};
 }
 function planImport(){
+  const seenSerial = new Set();
   return imp.rows.map(r => {
     const s = k => { const i = imp.map[k]; return i >= 0 ? String(r[i] ?? '').trim() : ''; };
     const raw = k => { const i = imp.map[k]; return i >= 0 ? r[i] : ''; };
@@ -1064,7 +1011,9 @@ function planImport(){
     const svc = s('service') && db.services.find(x => norm(x.name) === norm(s('service')));
     const note = [s('note'), loc && !holder.usedLoc ? 'Location (import): ' + loc : '', holder.unknown ? 'Holder (import): ' + holder.unknown : '',
       s('service') && !svc ? 'Service (import, unknown): ' + s('service') : ''].filter(Boolean).join('\n');
-    const dupSerial = s('serial') && db.assets.find(a => a.serial && norm(a.serial) === norm(s('serial')));
+    // a Serial Number is unique: one already in the system or earlier in the same file is skipped
+    const dupSerial = s('serial') && (db.assets.find(a => a.serial && norm(a.serial) === norm(s('serial'))) || seenSerial.has(norm(s('serial'))));
+    if (s('serial')) seenSerial.add(norm(s('serial')));
     // the target is one concrete office; a row may only confirm it, never redirect the asset somewhere else
     const errs = [], target = imp.officeId, rowOff = s('office'), rowC = s('country');
     if (rowOff){ const o = db.offices.find(x => norm(x.name) === norm(rowOff) || norm(x.code || '') === norm(rowOff)); if (!o) errs.push(`unknown office: ${rowOff}`); else if (target && o.id !== target) errs.push(`row says ${o.name}, target is ${officeLabel(target)}`); }
@@ -1185,7 +1134,7 @@ function buildTemplate(X){
     ['Legacy ID / sticker', 'Optional. Asset IDs (HU000001…) are assigned automatically.'],
     ['Type*', 'Required. Current types: ' + db.types.map(t => t.name).join(', ') + '. An unknown type name creates a new type.'],
     ['Model', 'e.g. Dell P2422H – created if it does not exist.'],
-    ['Status', 'Working / Faulty / In Repair / Lost / Retired. Empty: Working.'],
+    ['Status', 'Working / Faulty / In Repair / Missing / Lost / Retired. Empty: Working.'],
     ['Holder / location', 'Empty = In Stock. A person name or e-mail. Desk: “Room / Desk”, e.g. 2.12 / A1. Office pool: “Office: <room name>”.'],
     ['Service', 'Optional, the name of an existing Service.'],
     ['Warranty end / (months)', 'If the end is empty but months are set, it is calculated from the arrival date.'],

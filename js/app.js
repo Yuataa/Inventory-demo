@@ -9,6 +9,14 @@ function applyTheme(t){
   if (t) document.documentElement.dataset.theme = t;
   const b = $('#themeBtn'); if (b) b.textContent = currentTheme() === 'dark' ? '☀️ Light' : '🌙 Dark';
 }
+// the side menu: open, icons only or hidden; kept across pages and visits
+function setNav(m, temporary){
+  document.documentElement.dataset.nav = m;
+  if (!temporary) try { localStorage.setItem(NAV_KEY, m); } catch(e) {}
+  const b = $('#navToggle'); if (b) b.setAttribute('aria-expanded', String(m !== 'hidden'));
+  setHdr();
+}
+const toggleNav = () => setNav(document.documentElement.dataset.nav === 'hidden' ? 'open' : 'hidden');
 function toggleTheme(){
   const t = currentTheme() === 'dark' ? 'light' : 'dark';
   try { localStorage.setItem(THEME_KEY, t); } catch(e) {}
@@ -29,8 +37,10 @@ function render(){
   flashObj = r === 'room' && parts[2] && !lastRoute.startsWith('room/' + parts[1]) ? parts[2] : null;
   if (path !== lastRoute) selected.clear();
   lastRoute = path;
-  const navOf = {asset:'assets', import:'assets', person:'people', room:'rooms', project:'projects'};
-  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.r === (navOf[r] || r)));
+  const navOf = {asset:'assets', import:'assets', person:'people', room:'rooms', project:'projects', tour:''};
+  document.querySelectorAll('#nav a').forEach(a => { const on = a.dataset.r === (navOf[r] ?? r); a.classList.toggle('on', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  // on a phone the menu covers the page, so it closes after a choice
+  if (matchMedia('(max-width:760px)').matches && document.documentElement.dataset.nav !== 'hidden') setNav('hidden', true);
   ensureScope(); renderScope();
   const need = routePerm(r, parts[1]);
   if (need && !can(need)){ v.innerHTML = deniedHtml(); return; }
@@ -50,17 +60,17 @@ function render(){
     case 'room': v.innerHTML = viewRoom(parts[1], parts[2]); if (room(parts[1])) bindRoom(parts[1], parts[2]); break;
     case 'projects': v.innerHTML = viewProjects(params); bindProjects(); break;
     case 'project': v.innerHTML = viewProject(parts[1]); bindProject(parts[1]); break;
-    case 'docs': v.innerHTML = viewDocs(params);
-      $('#df').addEventListener('change', e => { location.hash = '#/docs' + (e.target.value ? '?f=' + e.target.value : ''); }); break;
-    case 'log': v.innerHTML = viewLogs(params); bindLogs(params); break;
+    case 'docs': v.innerHTML = viewDocs(params); bindDocs(); break;
+    case 'log': v.innerHTML = viewLogs(params); bindLogs(); break;
     case 'settings': v.innerHTML = viewSettings(parts[1], parts[2], params);
       if (parts[1] === 'fields' && parts[2]) bindFieldSet(parts[2]);
       if (parts[1] === 'types') bindModelFilters();
       if (parts[1] === 'dashboard') bindDashSettings();
       if ($('#tplPrev')) bindDocSettings();
+      if ($('#tdPage')) bindTplDesigner(params.get('tpl'));
       break;
     case 'tour': v.innerHTML = viewDashboard(); setTimeout(startTour, 300); break;
-    default: v.innerHTML = viewDashboard();
+    default: v.innerHTML = viewDashboard(); bindDashboard();
   }
   renderScope();
   applySorts();
@@ -85,5 +95,5 @@ applyBranding();
 applyNav();
 bindSearch();
 renderUserChip();
-setHdr();
+setNav(document.documentElement.dataset.nav || 'open');
 render();
